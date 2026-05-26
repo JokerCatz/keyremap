@@ -1,0 +1,188 @@
+[
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_5",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_6",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_7",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_8",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_A",
+    "count": 6
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_D",
+    "count": 6
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_E",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_ENTER",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_F1",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_F2",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_H",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_LEFTALT",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_LEFTCTRL",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_LEFTSHIFT",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_N",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_Q",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_S",
+    "count": 4
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_SPACE",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_T",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_W",
+    "count": 7
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_X",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_KEY",
+    "code": "KEY_Z",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event21",
+    "type": "EV_MSC",
+    "code": "MSC_SCAN",
+    "count": 58
+  },
+  {
+    "device": "/dev/input/event22",
+    "type": "EV_KEY",
+    "code": "BTN_LEFT",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event22",
+    "type": "EV_KEY",
+    "code": "BTN_RIGHT",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event22",
+    "type": "EV_KEY",
+    "code": "BTN_SIDE",
+    "count": 2
+  },
+  {
+    "device": "/dev/input/event22",
+    "type": "EV_MSC",
+    "code": "MSC_SCAN",
+    "count": 6
+  },
+  {
+    "device": "/dev/input/event22",
+    "type": "EV_REL",
+    "code": "REL_WHEEL",
+    "count": 5
+  },
+  {
+    "device": "/dev/input/event22",
+    "type": "EV_REL",
+    "code": "REL_WHEEL_HI_RES",
+    "count": 5
+  },
+  {
+    "device": "/dev/input/event22",
+    "type": "EV_REL",
+    "code": "REL_X",
+    "count": 152
+  },
+  {
+    "device": "/dev/input/event22",
+    "type": "EV_REL",
+    "code": "REL_Y",
+    "count": 127
+  }
+]

@@ -1,0 +1,10 @@
+# keyremap RP2040-Zero config interface
+#
+# Install:
+#   sudo cp udev/60-keyremap.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+#
+# Replug the RP2040 after installing.
+
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="cafe", ATTRS{idProduct}=="4020", TAG+="uaccess", GROUP="plugdev", MODE="0660"

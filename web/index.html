@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>keyremap</title>
+    <link rel="stylesheet" href="style.css?v=20260526-input">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="toolbar">
+        <div>
+          <h1>keyremap</h1>
+          <p id="status">Disconnected</p>
+        </div>
+        <div class="toolbar-actions">
+          <button id="bootloader" type="button" disabled>BOOTSEL</button>
+          <button id="connect" type="button">Connect</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Device</h2>
+        <dl>
+          <div>
+            <dt>Board</dt>
+            <dd id="board">-</dd>
+          </div>
+          <div>
+            <dt>Firmware</dt>
+            <dd id="firmware">-</dd>
+          </div>
+          <div>
+            <dt>Protocol</dt>
+            <dd id="protocol">-</dd>
+          </div>
+          <div>
+            <dt>Layer</dt>
+            <dd id="layer">-</dd>
+          </div>
+          <div>
+            <dt>Profiles</dt>
+            <dd id="profiles">-</dd>
+          </div>
+          <div>
+            <dt>Bindings</dt>
+            <dd id="bindings">-</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="panel">
+        <h2>Layer</h2>
+        <div class="segmented" id="layers">
+          <button data-layer="0" type="button">Base</button>
+          <button data-layer="1" type="button">Nav</button>
+          <button data-layer="2" type="button">Media</button>
+          <button data-layer="3" type="button">Game</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Live Input</h2>
+        <div class="live-input">
+          <div>
+            <dt>Event</dt>
+            <dd id="input-event">-</dd>
+          </div>
+          <div>
+            <dt>Name</dt>
+            <dd id="input-name">-</dd>
+          </div>
+          <div>
+            <dt>Raw</dt>
+            <dd id="input-raw">-</dd>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <h2>Remap</h2>
+          <div class="panel-actions">
+            <button id="save-config" type="button" disabled>Save</button>
+            <button id="reset-config" type="button" disabled>Reset</button>
+          </div>
+        </div>
+        <div class="mapping-table" id="mapping-table"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Fn Pair Keys</h2>
+        <div class="key-grid" id="key-grid"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Base Keys</h2>
+        <div class="key-grid" id="base-key-grid"></div>
+        <textarea id="key-sink" rows="3" spellcheck="false" placeholder="Key output test area"></textarea>
+      </section>
+
+      <section class="panel">
+        <h2>Debug</h2>
+        <div class="debug-grid" id="debug-buttons">
+          <button data-mouse-tap="1" type="button">Mouse 1 tap</button>
+          <button data-mouse-tap="2" type="button">Mouse 2 tap</button>
+          <button data-mouse-tap="3" type="button">Mouse 3 tap</button>
+          <button data-mouse-tap="4" type="button">Mouse 4 tap</button>
+          <button data-sim="3,0,12" type="button">Move X</button>
+          <button data-sim="4,0,-12" type="button">Move Y</button>
+          <button data-sim="5,0,1" type="button">Wheel up</button>
+          <button data-sim="5,0,-1" type="button">Wheel down</button>
+          <button id="release-all" type="button">Release all</button>
+        </div>
+        <pre id="debug">No output event</pre>
+      </section>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

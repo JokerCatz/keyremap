@@ -1,0 +1,46 @@
+{
+  "device": {
+    "name": "JD-DZ.COM USB HANDLE",
+    "vid": "1c4f",
+    "pid": "007c"
+  },
+  "physicalKeys": [
+    { "id": "k01", "order": 10, "base": "KEY_1", "fn": "KEY_5" },
+    { "id": "k05", "order": 20, "base": "KEY_2", "fn": "KEY_6" },
+    { "id": "k06", "order": 30, "base": "KEY_3", "fn": "KEY_7" },
+    { "id": "k04", "order": 40, "base": "KEY_4", "fn": "KEY_8" },
+    { "id": "k09", "order": 50, "base": "KEY_ESC", "fn": "KEY_ENTER" },
+    { "id": "k02", "order": 60, "base": "KEY_TAB", "fn": "KEY_F1" },
+    { "id": "k07", "order": 70, "base": "KEY_B", "fn": "KEY_T" },
+    { "id": "k08", "order": 80, "base": "KEY_G", "fn": "KEY_H" },
+    { "id": "k10", "order": 90, "base": "KEY_M", "fn": "KEY_F2" },
+    { "id": "k03", "order": 100, "base": "KEY_Y", "fn": "KEY_N" }
+  ],
+  "baseOnlyKeys": [
+    "KEY_Q",
+    "KEY_W",
+    "KEY_E",
+    "KEY_R",
+    "KEY_A",
+    "KEY_S",
+    "KEY_D",
+    "KEY_F",
+    "KEY_Z",
+    "KEY_X",
+    "KEY_C",
+    "KEY_V",
+    "KEY_SPACE",
+    "KEY_LEFTCTRL",
+    "KEY_LEFTSHIFT",
+    "KEY_LEFTALT"
+  ],
+  "mouseInputs": [
+    "BTN_LEFT",
+    "BTN_RIGHT",
+    "BTN_MIDDLE",
+    "BTN_SIDE",
+    "REL_X",
+    "REL_Y",
+    "REL_WHEEL"
+  ]
+}
