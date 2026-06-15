@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 captures/*.jsonl
 captures/input-summary.json
+.web.pid
+.web.log

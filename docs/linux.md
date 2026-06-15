@@ -43,13 +43,19 @@ http://localhost:<port>/
 For local testing from this repository:
 
 ```sh
-python3 -m http.server 8000 -d web
+make web-start
 ```
 
 Open:
 
 ```text
 http://localhost:8000
+```
+
+Stop the local server with:
+
+```sh
+make web-stop
 ```
 
 Use Chrome or Edge, click `Connect`, and select:

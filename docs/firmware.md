@@ -75,6 +75,14 @@ make build
 make flash
 ```
 
+The static WebHID UI can be served locally with:
+
+```sh
+make web-start
+make web-open
+make web-stop
+```
+
 Host-only probe firmware:
 
 ```sh

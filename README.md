@@ -43,6 +43,14 @@ make build
 make flash
 ```
 
+Local Web UI:
+
+```sh
+make web-start
+make web-open
+make web-stop
+```
+
 The host-only hardware probe can be built with:
 
 ```sh
