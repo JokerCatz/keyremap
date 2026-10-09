@@ -200,3 +200,7 @@ void output_hid_apply(const output_event_t *event) {
       break;
   }
 }
+
+bool output_hid_keyboard_pending(void) {
+  return keyboard_pending;
+}

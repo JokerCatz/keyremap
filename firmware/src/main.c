@@ -4,6 +4,7 @@
 #include "config.h"
 #include "host_input.h"
 #include "keyremap_protocol.h"
+#include "macro.h"
 #include "mapper.h"
 #include "output_hid.h"
 #include "raw_capture.h"
@@ -422,6 +423,7 @@ int main(void) {
   board_init();
   config_init();
   mapper_init();
+  macro_init();
   output_hid_init();
   host_input_init();
   status_led_init();
@@ -456,6 +458,7 @@ int main(void) {
     tuh_task_ext(0, false);
     host_input_task();
     mapper_task();
+    macro_task();
     output_hid_task();
     status_led_task();
   }

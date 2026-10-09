@@ -17,6 +17,7 @@ add_executable(keyremap
   src/config.c
   src/hid_parser.c
   src/host_input.c
+  src/macro.c
   src/mapper.c
   src/output_hid.c
   src/raw_capture.c

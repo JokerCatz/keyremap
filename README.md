@@ -61,6 +61,15 @@ the key before it sends the key's own function, so one key can be both, e.g.
 touch-pad press: tap = browser back, hold = Layer 1. With 「切到 Layer N（常駐）」
 a long press (for example 3000 ms) switches layers without key combos.
 
+## Typing The Config URL
+
+On any computer: focus a browser address bar, then hold mouse left + right +
+back (touch-pad press) on the handle for 20 seconds. The RP2040 types
+`https://jokercatz.github.io/keyremap/` (no Enter; US keyboard layout). This
+check runs on the physical buttons before remapping, so no binding can disable
+it. The URL and hold time are `CONFIG_URL` / `CONFIG_URL_HOLD_MS` in
+`firmware/src/mapper.c`.
+
 Local Web UI:
 
 ```sh

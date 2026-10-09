@@ -4,6 +4,7 @@
 
 #include "config.h"
 #include "keyremap_protocol.h"
+#include "macro.h"
 #include "output_hid.h"
 #include "pico/time.h"
 #include "status_led.h"
@@ -46,6 +47,18 @@ typedef struct {
   output_event_t output;
   uint32_t press_ms;
 } pending_tap_release_t;
+
+/* Holding left + right + back (mouse buttons 1, 2, 4) on the handle for
+ * CONFIG_URL_HOLD_MS types the config page URL, so it never has to be typed by
+ * hand on another computer. Checked before remapping, so bindings can't
+ * disable it. */
+#define CONFIG_URL "https://jokercatz.github.io/keyremap/"
+#define CONFIG_URL_HOLD_MS 20000
+#define CONFIG_URL_BUTTONS ((1u << 0) | (1u << 1) | (1u << 3))
+
+static uint8_t physical_buttons;
+static uint32_t url_chord_start_ms;
+static bool url_chord_fired;
 
 static held_input_t held[HELD_MAX];
 static pending_tap_hold_t pending;
@@ -268,6 +281,8 @@ void mapper_init(void) {
   memset(held, 0, sizeof(held));
   memset(&pending, 0, sizeof(pending));
   memset(&tap_release, 0, sizeof(tap_release));
+  physical_buttons = 0;
+  url_chord_fired = false;
   memset(log_ring, 0, sizeof(log_ring));
   memset(motion_remainder, 0, sizeof(motion_remainder));
   log_seq = 0;
@@ -275,7 +290,26 @@ void mapper_init(void) {
   hold_layer = NO_LAYER;
 }
 
+static void track_url_chord(const input_event_t *input) {
+  if (input->kind != INPUT_KIND_MOUSE_BUTTON || input->code < 1 || input->code > 8) {
+    return;
+  }
+
+  uint8_t mask = (uint8_t)(1u << (input->code - 1));
+  bool was_complete = (physical_buttons & CONFIG_URL_BUTTONS) == CONFIG_URL_BUTTONS;
+  physical_buttons = input->value ? (physical_buttons | mask) : (physical_buttons & (uint8_t)~mask);
+  bool complete = (physical_buttons & CONFIG_URL_BUTTONS) == CONFIG_URL_BUTTONS;
+
+  if (complete && !was_complete) {
+    url_chord_start_ms = now_ms();
+  } else if (!complete) {
+    url_chord_fired = false;
+  }
+}
+
 void mapper_handle_input(const input_event_t *input, bool simulated) {
+  track_url_chord(input);
+
   if (update_pending(input)) {
     return;
   }
@@ -316,6 +350,13 @@ void mapper_handle_input(const input_event_t *input, bool simulated) {
 
 void mapper_task(void) {
   uint32_t now = now_ms();
+
+  bool chord = (physical_buttons & CONFIG_URL_BUTTONS) == CONFIG_URL_BUTTONS;
+  if (chord && !url_chord_fired && now - url_chord_start_ms >= CONFIG_URL_HOLD_MS) {
+    url_chord_fired = true;
+    mapper_release_all();
+    macro_type(CONFIG_URL);
+  }
 
   if (pending.active && now - pending.start_ms >= pending.threshold_ms) {
     resolve_pending_as_hold();

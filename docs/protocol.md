@@ -161,6 +161,10 @@ field as a tap-hold threshold in milliseconds (0..5000, 0 = act on press):
   runs the layer action immediately
 - `layer` / `next layer` always wait the full threshold (long press)
 
+Holding physical mouse buttons 1, 2 and 4 together for 20 s releases all
+outputs and types the config page URL on the keyboard interface. This is
+checked before remapping.
+
 The active layer is the held layer while a `layer hold` key is down, otherwise
 the base layer chosen by `layer`, `next layer`, or command `0x30`. It always
 starts at layer 0 after reset.
