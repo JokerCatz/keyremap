@@ -56,6 +56,11 @@ The default config has no layer key. In the web UI 綁定 tab, pick a key with
 「按手把新增」 and set its output to e.g. 「按住時切到 Layer 1」. Then build the
 Layer 1 bindings; anything not bound there keeps working as in Base.
 
+Each layer binding has a threshold (default 500 ms, up to 5000 ms). Releasing
+the key before it sends the key's own function, so one key can be both, e.g.
+touch-pad press: tap = browser back, hold = Layer 1. With 「切到 Layer N（常駐）」
+a long press (for example 3000 ms) switches layers without key combos.
+
 Local Web UI:
 
 ```sh

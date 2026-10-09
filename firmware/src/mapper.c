@@ -5,9 +5,15 @@
 #include "config.h"
 #include "keyremap_protocol.h"
 #include "output_hid.h"
+#include "pico/time.h"
 #include "status_led.h"
 
 #define HELD_MAX 16
+#define TAP_HOLD_MAX_MS 5000
+#define TAP_RELEASE_DELAY_MS 30
+/* Movement (in input counts) that turns a pending layer-hold into a hold, so a
+ * slight cursor nudge while pressing a pad does not cancel the tap. */
+#define TAP_HOLD_MOTION_THRESHOLD 24
 #define LOG_SIZE 64
 #define NO_LAYER 0xff
 
@@ -19,7 +25,31 @@ typedef struct {
   output_event_t output;
 } held_input_t;
 
+/* A layer binding with a threshold (binding scale = ms) waits here: released
+ * before the threshold it taps the input's own function, otherwise it runs the
+ * layer action. Any other key, or enough movement, ends the wait of a
+ * layer-hold early as a hold. Long-press switches keep waiting. */
+typedef struct {
+  bool active;
+  bool simulated;
+  input_event_t input;
+  output_event_t action;
+  uint32_t start_ms;
+  uint16_t threshold_ms;
+  int32_t motion;
+} pending_tap_hold_t;
+
+typedef struct {
+  bool active;
+  bool simulated;
+  input_event_t input;
+  output_event_t output;
+  uint32_t press_ms;
+} pending_tap_release_t;
+
 static held_input_t held[HELD_MAX];
+static pending_tap_hold_t pending;
+static pending_tap_release_t tap_release;
 static uint8_t base_layer;
 static uint8_t hold_layer;
 /* Sub-unit remainders (in 1/1000) of scaled movement, per output axis, so a
@@ -46,7 +76,18 @@ static void passthrough(const input_event_t *input, output_event_t *output) {
   }
 }
 
-static void resolve(const input_event_t *input, output_event_t *output) {
+static bool output_is_layer(uint8_t kind) {
+  return kind == OUTPUT_KIND_LAYER || kind == OUTPUT_KIND_NEXT_LAYER || kind == OUTPUT_KIND_LAYER_HOLD;
+}
+
+static uint32_t now_ms(void) {
+  return to_ms_since_boot(get_absolute_time());
+}
+
+/* Resolves the output; *tap_hold_ms is the binding's tap-hold threshold for
+ * layer outputs and 0 otherwise. */
+static void resolve(const input_event_t *input, output_event_t *output, uint16_t *tap_hold_ms) {
+  *tap_hold_ms = 0;
   uint8_t layer = mapper_active_layer();
   const keyremap_binding_t *binding = config_find_binding(layer, input->kind, input->code);
   if (!binding && layer != 0) {
@@ -55,6 +96,15 @@ static void resolve(const input_event_t *input, output_event_t *output) {
 
   if (!binding) {
     passthrough(input, output);
+    return;
+  }
+
+  if (output_is_layer(binding->output_kind)) {
+    output->kind = binding->output_kind;
+    output->code = binding->output_code;
+    output->value = input->value;
+    int32_t ms = binding->scale < 0 ? 0 : binding->scale;
+    *tap_hold_ms = (uint16_t)(ms > TAP_HOLD_MAX_MS ? TAP_HOLD_MAX_MS : ms);
     return;
   }
 
@@ -141,8 +191,83 @@ static void log_event(const input_event_t *input, const output_event_t *output, 
   entry->simulated = simulated;
 }
 
+static void emit(const input_event_t *input, const output_event_t *output, bool simulated) {
+  apply_layer_action(input, output);
+  log_event(input, output, simulated);
+  output_hid_apply(output);
+}
+
+static void flush_tap_release(void) {
+  if (!tap_release.active) {
+    return;
+  }
+  tap_release.active = false;
+  emit(&tap_release.input, &tap_release.output, tap_release.simulated);
+}
+
+static void resolve_pending_as_hold(void) {
+  if (!pending.active) {
+    return;
+  }
+  pending.active = false;
+  remember_press(&pending.input, &pending.action);
+  emit(&pending.input, &pending.action, pending.simulated);
+}
+
+static void resolve_pending_as_tap(void) {
+  pending.active = false;
+  flush_tap_release();
+
+  output_event_t press;
+  passthrough(&pending.input, &press);
+  press.value = 1;
+  emit(&pending.input, &press, pending.simulated);
+
+  /* The release goes out a little later so the press reaches the computer as
+   * its own HID report. */
+  tap_release.active = true;
+  tap_release.simulated = pending.simulated;
+  tap_release.input = pending.input;
+  tap_release.input.value = 0;
+  tap_release.output = press;
+  tap_release.output.value = 0;
+  tap_release.press_ms = now_ms();
+}
+
+/* Returns true when the input was consumed by the pending tap-hold. */
+static bool update_pending(const input_event_t *input) {
+  if (!pending.active) {
+    return false;
+  }
+
+  if (input->kind == pending.input.kind && input->code == pending.input.code) {
+    if (input->value == 0) {
+      resolve_pending_as_tap();
+    }
+    return true;
+  }
+
+  if (pending.action.kind != OUTPUT_KIND_LAYER_HOLD) {
+    return false;
+  }
+
+  if (input_is_digital(input->kind)) {
+    if (input->value != 0) {
+      resolve_pending_as_hold();
+    }
+  } else {
+    pending.motion += input->value < 0 ? -input->value : input->value;
+    if (pending.motion >= TAP_HOLD_MOTION_THRESHOLD) {
+      resolve_pending_as_hold();
+    }
+  }
+  return false;
+}
+
 void mapper_init(void) {
   memset(held, 0, sizeof(held));
+  memset(&pending, 0, sizeof(pending));
+  memset(&tap_release, 0, sizeof(tap_release));
   memset(log_ring, 0, sizeof(log_ring));
   memset(motion_remainder, 0, sizeof(motion_remainder));
   log_seq = 0;
@@ -151,6 +276,10 @@ void mapper_init(void) {
 }
 
 void mapper_handle_input(const input_event_t *input, bool simulated) {
+  if (update_pending(input)) {
+    return;
+  }
+
   output_event_t output;
   bool digital = input_is_digital(input->kind);
   held_input_t *previous = digital && input->value == 0 ? find_held(input->kind, input->code) : NULL;
@@ -160,19 +289,47 @@ void mapper_handle_input(const input_event_t *input, bool simulated) {
     output.value = 0;
     memset(previous, 0, sizeof(*previous));
   } else {
-    resolve(input, &output);
+    uint16_t tap_hold_ms;
+    resolve(input, &output, &tap_hold_ms);
+
+    if (digital && input->value != 0 && tap_hold_ms) {
+      if (pending.active) {
+        resolve_pending_as_tap();
+      }
+      pending.active = true;
+      pending.simulated = simulated;
+      pending.input = *input;
+      pending.action = output;
+      pending.start_ms = now_ms();
+      pending.threshold_ms = tap_hold_ms;
+      pending.motion = 0;
+      return;
+    }
+
     if (digital && input->value != 0) {
       remember_press(input, &output);
     }
   }
 
-  apply_layer_action(input, &output);
-  log_event(input, &output, simulated);
-  output_hid_apply(&output);
+  emit(input, &output, simulated);
+}
+
+void mapper_task(void) {
+  uint32_t now = now_ms();
+
+  if (pending.active && now - pending.start_ms >= pending.threshold_ms) {
+    resolve_pending_as_hold();
+  }
+
+  if (tap_release.active && now - tap_release.press_ms >= TAP_RELEASE_DELAY_MS) {
+    flush_tap_release();
+  }
 }
 
 void mapper_release_all(void) {
   memset(held, 0, sizeof(held));
+  memset(&pending, 0, sizeof(pending));
+  memset(&tap_release, 0, sizeof(tap_release));
   hold_layer = NO_LAYER;
   show_layer();
   output_hid_release_all();

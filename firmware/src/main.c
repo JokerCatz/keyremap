@@ -135,7 +135,7 @@ static void handle_get_info(uint8_t sequence) {
   payload[0] = KEYREMAP_PROTOCOL_MAJOR;
   payload[1] = KEYREMAP_PROTOCOL_MINOR;
   payload[2] = 0;
-  payload[3] = 3;
+  payload[3] = 4;
   payload[4] = 0;
   payload[5] = mapper_active_layer();
   payload[6] = host_input_status();
@@ -455,6 +455,7 @@ int main(void) {
     tud_task();
     tuh_task_ext(0, false);
     host_input_task();
+    mapper_task();
     output_hid_task();
     status_led_task();
   }

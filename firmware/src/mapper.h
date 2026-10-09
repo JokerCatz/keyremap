@@ -28,6 +28,7 @@ void mapper_init(void);
 /* Resolves an input through the active layer (falling back to the base layer,
  * then to identity passthrough), runs layer actions and emits HID output. */
 void mapper_handle_input(const input_event_t *input, bool simulated);
+void mapper_task(void);
 void mapper_release_all(void);
 
 uint8_t mapper_active_layer(void);

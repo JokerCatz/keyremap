@@ -151,6 +151,16 @@ Digital inputs (keys, mouse buttons, consumer usages) remember the output they
 resolved to when pressed; the release always goes to that same output, even if
 the layer changed in between.
 
+Layer outputs (`layer`, `next layer`, `layer hold`) use the binding's `scale`
+field as a tap-hold threshold in milliseconds (0..5000, 0 = act on press):
+
+- released before the threshold: the input's own passthrough function is sent
+  as a tap (press, then release ~30 ms later)
+- held for the threshold: the layer action runs
+- `layer hold` only: pressing another key, or moving 24+ counts, while waiting
+  runs the layer action immediately
+- `layer` / `next layer` always wait the full threshold (long press)
+
 The active layer is the held layer while a `layer hold` key is down, otherwise
 the base layer chosen by `layer`, `next layer`, or command `0x30`. It always
 starts at layer 0 after reset.

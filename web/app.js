@@ -133,12 +133,19 @@ function outputName(kind, code) {
     case OUT.REL_Y: return "滑鼠 Y";
     case OUT.WHEEL: return "滾輪";
     case OUT.CONSUMER: return CONSUMER_NAMES.get(code) ?? `多媒體 0x${hex(code)}`;
-    case OUT.LAYER: return `切到 ${LAYER_NAMES[code] ?? code}`;
+    case OUT.LAYER: return `切到 ${LAYER_NAMES[code] ?? code}（常駐）`;
     case OUT.LAYER_HOLD: return `按住時 ${LAYER_NAMES[code] ?? code}`;
-    case OUT.NEXT_LAYER: return "下一個 Layer";
+    case OUT.NEXT_LAYER: return "切到下一個 Layer（常駐）";
     case OUT.BLOCK: return "停用";
     default: return `未知 ${kind}:${code}`;
   }
+}
+
+const DEFAULT_TAP_HOLD_MS = 500;
+const MAX_TAP_HOLD_MS = 5000;
+
+function isLayerOutput(kind) {
+  return kind === OUT.LAYER || kind === OUT.NEXT_LAYER || kind === OUT.LAYER_HOLD;
 }
 
 function isMotion(kind) {
@@ -480,8 +487,8 @@ function outputOptions(inKind) {
   if (!motionIn) {
     groups.push(["Layer", [
       ...LAYER_NAMES.map((name, i) => [OUT.LAYER_HOLD, i, `按住時切到 ${name}`]),
-      ...LAYER_NAMES.map((name, i) => [OUT.LAYER, i, `按一下切到 ${name}`]),
-      [OUT.NEXT_LAYER, 0, "按一下切到下一個 Layer"],
+      ...LAYER_NAMES.map((name, i) => [OUT.LAYER, i, `切到 ${name}（常駐）`]),
+      [OUT.NEXT_LAYER, 0, "切到下一個 Layer（常駐）"],
     ]]);
     groups.push(["多媒體", [...CONSUMER_NAMES].map(([code, name]) => [OUT.CONSUMER, code, name])]);
     groups.push(["鍵盤", [...KEY_NAMES].map(([code, name]) => [OUT.KEY, code, name])]);
@@ -540,6 +547,10 @@ function renderBindings() {
     input.textContent = inputName(binding.inKind, binding.inCode);
 
     const select = makeOutputSelect(binding, async (kind, code) => {
+      // Layer bindings store their tap/long-press threshold (ms) in the scale field.
+      if (isLayerOutput(kind) !== isLayerOutput(binding.outKind)) {
+        binding.scale = isLayerOutput(kind) ? DEFAULT_TAP_HOLD_MS : 1000;
+      }
       binding.outKind = kind;
       binding.outCode = code;
       await writeBinding(binding).catch((error) => setStatus(error.message));
@@ -548,7 +559,24 @@ function renderBindings() {
 
     const scale = document.createElement("label");
     scale.className = "scale";
-    if (isMotion(binding.inKind) || isMotion(binding.outKind)) {
+    if (isLayerOutput(binding.outKind)) {
+      const field = document.createElement("input");
+      field.type = "number";
+      field.min = "0";
+      field.max = String(MAX_TAP_HOLD_MS);
+      field.step = "100";
+      field.value = Math.max(0, binding.scale);
+      field.title = binding.outKind === OUT.LAYER_HOLD
+        ? "按住多久才算切換 layer；在這之前放開＝送出這顆鍵原本的功能。0＝立即切換"
+        : "長按多久才切換 layer；在這之前放開＝送出這顆鍵原本的功能。0＝按下立即切換";
+      field.addEventListener("change", async () => {
+        binding.scale = Math.max(0, Math.min(MAX_TAP_HOLD_MS, Math.round(Number(field.value) || 0)));
+        field.value = binding.scale;
+        await writeBinding(binding).catch((error) => setStatus(error.message));
+      });
+      scale.append(field, " ms");
+      scale.title = field.title;
+    } else if (isMotion(binding.inKind) || isMotion(binding.outKind)) {
       const field = document.createElement("input");
       field.type = "number";
       field.step = "10";
