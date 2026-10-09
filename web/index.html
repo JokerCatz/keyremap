@@ -1,121 +1,164 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-Hant">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>keyremap</title>
-    <link rel="stylesheet" href="style.css?v=20260526-input">
+    <link rel="stylesheet" href="style.css?v=20261009b">
   </head>
   <body>
     <main class="shell">
-      <section class="toolbar">
+      <header class="toolbar">
         <div>
           <h1>keyremap</h1>
-          <p id="status">Disconnected</p>
+          <p id="status">未連線</p>
         </div>
         <div class="toolbar-actions">
-          <button id="bootloader" type="button" disabled>BOOTSEL</button>
-          <button id="connect" type="button">Connect</button>
+          <button id="bootloader" type="button" class="danger" disabled>BOOTSEL</button>
+          <button id="connect" type="button" class="primary">連線</button>
         </div>
-      </section>
+      </header>
 
-      <section class="panel">
-        <h2>Device</h2>
-        <dl>
-          <div>
-            <dt>Board</dt>
-            <dd id="board">-</dd>
-          </div>
-          <div>
-            <dt>Firmware</dt>
-            <dd id="firmware">-</dd>
-          </div>
-          <div>
-            <dt>Protocol</dt>
-            <dd id="protocol">-</dd>
-          </div>
-          <div>
-            <dt>Layer</dt>
-            <dd id="layer">-</dd>
-          </div>
-          <div>
-            <dt>Profiles</dt>
-            <dd id="profiles">-</dd>
-          </div>
-          <div>
-            <dt>Bindings</dt>
-            <dd id="bindings">-</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section class="panel">
-        <h2>Layer</h2>
-        <div class="segmented" id="layers">
-          <button data-layer="0" type="button">Base</button>
-          <button data-layer="1" type="button">Nav</button>
-          <button data-layer="2" type="button">Media</button>
-          <button data-layer="3" type="button">Game</button>
+      <section class="panel layer-bar">
+        <div>
+          <h2>目前 Layer</h2>
+          <p class="hint">點選可切換常駐 layer；按住型 layer 放開後會自動回來。</p>
         </div>
+        <div class="segmented" id="active-layers"></div>
       </section>
 
-      <section class="panel">
-        <h2>Live Input</h2>
-        <div class="live-input">
-          <div>
-            <dt>Event</dt>
-            <dd id="input-event">-</dd>
+      <nav class="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="monitor" class="active">偵測</button>
+        <button type="button" role="tab" data-tab="remap">綁定</button>
+        <button type="button" role="tab" data-tab="device">裝置</button>
+      </nav>
+
+      <section class="tab-page" id="tab-monitor">
+        <section class="panel">
+          <h2>最近的輸入</h2>
+          <div class="last-input">
+            <div>
+              <span class="label">輸入</span>
+              <strong id="last-input">-</strong>
+            </div>
+            <div>
+              <span class="label">輸出</span>
+              <strong id="last-output">-</strong>
+            </div>
+            <div>
+              <span class="label">Layer</span>
+              <strong id="last-layer">-</strong>
+            </div>
           </div>
-          <div>
-            <dt>Name</dt>
-            <dd id="input-name">-</dd>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>事件（解讀後 → remap 結果）</h2>
+            <div class="panel-actions">
+              <label class="check"><input type="checkbox" id="event-hide-motion" checked> 隱藏移動</label>
+              <button type="button" id="event-pause">暫停</button>
+              <button type="button" id="event-clear">清除</button>
+            </div>
           </div>
-          <div>
-            <dt>Raw</dt>
-            <dd id="input-raw">-</dd>
+          <p class="hint">最新的在最上面；往下捲動時畫面會暫停更新，捲回頂端就會繼續。</p>
+          <div class="log" id="event-log"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Raw HID 封包（手把送出的原始資料）</h2>
+            <div class="panel-actions">
+              <label class="check"><input type="checkbox" id="raw-hide-motion" checked> 隱藏純移動</label>
+              <select id="raw-filter">
+                <option value="all">全部介面</option>
+                <option value="0">介面 0</option>
+                <option value="1">介面 1</option>
+                <option value="2">介面 2</option>
+                <option value="3">介面 3</option>
+              </select>
+              <button type="button" id="raw-pause">暫停</button>
+              <button type="button" id="raw-clear">清除</button>
+            </div>
           </div>
-        </div>
-      </section>
+          <div class="log mono" id="raw-log"></div>
+        </section>
 
-      <section class="panel">
-        <div class="panel-heading">
-          <h2>Remap</h2>
-          <div class="panel-actions">
-            <button id="save-config" type="button" disabled>Save</button>
-            <button id="reset-config" type="button" disabled>Reset</button>
+        <section class="panel">
+          <h2>輸出測試</h2>
+          <p class="hint">由 RP2040 模擬輸入，經過目前 layer 的 remap 後送給電腦。</p>
+          <div class="debug-grid">
+            <button data-sim-tap="2,1" type="button">滑鼠左鍵</button>
+            <button data-sim-tap="2,2" type="button">滑鼠右鍵</button>
+            <button data-sim="3,0,40" type="button">X +40</button>
+            <button data-sim="4,0,40" type="button">Y +40</button>
+            <button data-sim="5,0,1" type="button">滾輪上</button>
+            <button data-sim="5,0,-1" type="button">滾輪下</button>
+            <button data-sim-tap="1,4" type="button">按鍵 A</button>
+            <button id="release-all" type="button" class="danger">全部放開</button>
           </div>
-        </div>
-        <div class="mapping-table" id="mapping-table"></div>
+          <textarea id="key-sink" rows="2" spellcheck="false" placeholder="在這裡測試鍵盤輸出"></textarea>
+        </section>
       </section>
 
-      <section class="panel">
-        <h2>Fn Pair Keys</h2>
-        <div class="key-grid" id="key-grid"></div>
+      <section class="tab-page" id="tab-remap" hidden>
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>編輯 Layer</h2>
+            <div class="panel-actions">
+              <button id="save-config" type="button" class="primary" disabled>儲存到裝置</button>
+              <button id="reset-config" type="button" class="danger" disabled>全部清空</button>
+            </div>
+          </div>
+          <div class="segmented" id="edit-layers"></div>
+          <p class="hint" id="layer-rule"></p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>綁定</h2>
+            <div class="panel-actions">
+              <button id="learn" type="button" class="primary" disabled>按手把新增</button>
+            </div>
+          </div>
+          <p class="hint" id="learn-hint" hidden>請按下手把上的鍵，或推動搖桿 / 滾輪…（Esc 也可以，會被捕捉）</p>
+          <div class="add-row">
+            <select id="add-input"></select>
+            <button id="add-manual" type="button" disabled>手動新增</button>
+          </div>
+          <div class="binding-list" id="binding-list">
+            <p class="hint">尚未連線</p>
+          </div>
+        </section>
       </section>
 
-      <section class="panel">
-        <h2>Base Keys</h2>
-        <div class="key-grid" id="base-key-grid"></div>
-        <textarea id="key-sink" rows="3" spellcheck="false" placeholder="Key output test area"></textarea>
-      </section>
+      <section class="tab-page" id="tab-device" hidden>
+        <section class="panel">
+          <h2>RP2040</h2>
+          <dl>
+            <div><dt>Board</dt><dd id="board">-</dd></div>
+            <div><dt>Firmware</dt><dd id="firmware">-</dd></div>
+            <div><dt>Protocol</dt><dd id="protocol">-</dd></div>
+          </dl>
+        </section>
 
-      <section class="panel">
-        <h2>Debug</h2>
-        <div class="debug-grid" id="debug-buttons">
-          <button data-mouse-tap="1" type="button">Mouse 1 tap</button>
-          <button data-mouse-tap="2" type="button">Mouse 2 tap</button>
-          <button data-mouse-tap="3" type="button">Mouse 3 tap</button>
-          <button data-mouse-tap="4" type="button">Mouse 4 tap</button>
-          <button data-sim="3,0,12" type="button">Move X</button>
-          <button data-sim="4,0,-12" type="button">Move Y</button>
-          <button data-sim="5,0,1" type="button">Wheel up</button>
-          <button data-sim="5,0,-1" type="button">Wheel down</button>
-          <button id="release-all" type="button">Release all</button>
-        </div>
-        <pre id="debug">No output event</pre>
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>手把（USB Host 端）</h2>
+            <div class="panel-actions">
+              <button id="refresh-host" type="button" disabled>重新讀取</button>
+            </div>
+          </div>
+          <dl>
+            <div><dt>狀態</dt><dd id="host-status">-</dd></div>
+            <div><dt>VID:PID</dt><dd id="host-vidpid">-</dd></div>
+            <div><dt>USB 線路</dt><dd id="host-line">-</dd></div>
+          </dl>
+          <div id="interfaces"></div>
+        </section>
       </section>
     </main>
 
-    <script type="module" src="app.js"></script>
+    <script type="module" src="app.js?v=20261009b"></script>
   </body>
 </html>

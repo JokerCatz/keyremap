@@ -1,579 +1,928 @@
 const REPORT_SIZE = 64;
-const CMD_GET_INFO = 0x01;
-const CMD_GET_CONFIG_SUMMARY = 0x10;
-const CMD_GET_BINDING = 0x11;
-const CMD_SET_BINDING = 0x12;
-const CMD_SAVE_CONFIG = 0x13;
-const CMD_RESET_CONFIG = 0x14;
-const CMD_SET_ACTIVE_LAYER = 0x30;
-const CMD_GET_INPUT_EVENT = 0x33;
-const CMD_SIMULATE_INPUT = 0x40;
-const CMD_GET_OUTPUT_STATE = 0x41;
-const CMD_RELEASE_ALL = 0x42;
-const CMD_REBOOT_BOOTSEL = 0x7f;
+const PROTOCOL_MAJOR = 2;
 
-const physicalKeys = [
-  { id: "k01", label: "1", base: "KEY_1", baseCode: 0x1e, fn: "KEY_5", fnCode: 0x22 },
-  { id: "k05", label: "2", base: "KEY_2", baseCode: 0x1f, fn: "KEY_6", fnCode: 0x23 },
-  { id: "k06", label: "3", base: "KEY_3", baseCode: 0x20, fn: "KEY_7", fnCode: 0x24 },
-  { id: "k04", label: "4", base: "KEY_4", baseCode: 0x21, fn: "KEY_8", fnCode: 0x25 },
-  { id: "k09", label: "Esc", base: "KEY_ESC", baseCode: 0x29, fn: "KEY_ENTER", fnCode: 0x28 },
-  { id: "k02", label: "Tab", base: "KEY_TAB", baseCode: 0x2b, fn: "KEY_F1", fnCode: 0x3a },
-  { id: "k07", label: "B", base: "KEY_B", baseCode: 0x05, fn: "KEY_T", fnCode: 0x17 },
-  { id: "k08", label: "G", base: "KEY_G", baseCode: 0x0a, fn: "KEY_H", fnCode: 0x0b },
-  { id: "k10", label: "M", base: "KEY_M", baseCode: 0x10, fn: "KEY_F2", fnCode: 0x3b },
-  { id: "k03", label: "Y", base: "KEY_Y", baseCode: 0x1c, fn: "KEY_N", fnCode: 0x11 },
+const CMD = {
+  GET_INFO: 0x01,
+  GET_CONFIG_SUMMARY: 0x10,
+  GET_BINDING: 0x11,
+  SET_BINDING: 0x12,
+  SAVE_CONFIG: 0x13,
+  RESET_CONFIG: 0x14,
+  GET_RAW_REPORTS: 0x20,
+  GET_HID_INTERFACES: 0x21,
+  GET_REPORT_DESCRIPTOR: 0x22,
+  SET_ACTIVE_LAYER: 0x30,
+  GET_LAYER_STATE: 0x31,
+  GET_HOST_STATUS: 0x32,
+  GET_EVENT_LOG: 0x34,
+  SIMULATE_INPUT: 0x40,
+  RELEASE_ALL: 0x42,
+  REBOOT_BOOTSEL: 0x7f,
+};
+
+const IN = { KEY: 1, MOUSE_BUTTON: 2, REL_X: 3, REL_Y: 4, WHEEL: 5, CONSUMER: 6 };
+const OUT = {
+  NONE: 0, KEY: 1, MOUSE_BUTTON: 2, REL_X: 3, REL_Y: 4, WHEEL: 5,
+  LAYER: 6, CONSUMER: 7, NEXT_LAYER: 8, LAYER_HOLD: 9, BLOCK: 10,
+};
+
+const LAYER_COUNT = 4;
+const BINDING_COUNT = 48;
+const LAYER_NAMES = ["Base", "Layer 1", "Layer 2", "Layer 3"];
+
+// Physical keys of the JD-DZ.COM handle (see config/handle-layout.json):
+// each one sends a different HID key in the handle's built-in Fn mode.
+const PHYSICAL_KEYS = [
+  ["k01", 0x1e, 0x22], ["k05", 0x1f, 0x23], ["k06", 0x20, 0x24], ["k04", 0x21, 0x25],
+  ["k09", 0x29, 0x28], ["k02", 0x2b, 0x3a], ["k07", 0x05, 0x17], ["k08", 0x0a, 0x0b],
+  ["k10", 0x10, 0x3b], ["k03", 0x1c, 0x11],
+];
+const PHYSICAL_BY_CODE = new Map();
+for (const [id, base, fn] of PHYSICAL_KEYS) {
+  PHYSICAL_BY_CODE.set(base, `${id}`);
+  PHYSICAL_BY_CODE.set(fn, `${id} Fn`);
+}
+const HANDLE_KEYS = [
+  0x1e, 0x1f, 0x20, 0x21, 0x29, 0x2b, 0x05, 0x0a, 0x10, 0x1c,
+  0x22, 0x23, 0x24, 0x25, 0x28, 0x3a, 0x17, 0x0b, 0x3b, 0x11,
+  0x14, 0x1a, 0x08, 0x15, 0x04, 0x16, 0x07, 0x09, 0x1d, 0x1b, 0x06, 0x19, 0x2c, 0xe0, 0xe1, 0xe2,
 ];
 
-const baseOnlyKeys = [
-  { label: "Q", code: 0x14 },
-  { label: "W", code: 0x1a },
-  { label: "E", code: 0x08 },
-  { label: "R", code: 0x15 },
-  { label: "A", code: 0x04 },
-  { label: "S", code: 0x16 },
-  { label: "D", code: 0x07 },
-  { label: "F", code: 0x09 },
-  { label: "Z", code: 0x1d },
-  { label: "X", code: 0x1b },
-  { label: "C", code: 0x06 },
-  { label: "V", code: 0x19 },
-  { label: "Space", code: 0x2c },
-  { label: "Ctrl", code: 0xe0 },
-  { label: "Shift", code: 0xe1 },
-  { label: "Alt", code: 0xe2 },
-];
+const KEY_NAMES = new Map([
+  ...Array.from({ length: 26 }, (_, i) => [0x04 + i, String.fromCharCode(65 + i)]),
+  [0x1e, "1"], [0x1f, "2"], [0x20, "3"], [0x21, "4"], [0x22, "5"],
+  [0x23, "6"], [0x24, "7"], [0x25, "8"], [0x26, "9"], [0x27, "0"],
+  [0x28, "Enter"], [0x29, "Esc"], [0x2a, "Backspace"], [0x2b, "Tab"], [0x2c, "Space"],
+  [0x2d, "-"], [0x2e, "="], [0x2f, "["], [0x30, "]"], [0x31, "\\"],
+  [0x33, ";"], [0x34, "'"], [0x35, "`"], [0x36, ","], [0x37, "."], [0x38, "/"],
+  [0x39, "Caps Lock"],
+  ...Array.from({ length: 12 }, (_, i) => [0x3a + i, `F${i + 1}`]),
+  [0x46, "Print Screen"], [0x47, "Scroll Lock"], [0x48, "Pause"],
+  [0x49, "Insert"], [0x4a, "Home"], [0x4b, "Page Up"], [0x4c, "Delete"], [0x4d, "End"], [0x4e, "Page Down"],
+  [0x4f, "→"], [0x50, "←"], [0x51, "↓"], [0x52, "↑"],
+  [0x53, "Num Lock"], [0x54, "KP /"], [0x55, "KP *"], [0x56, "KP -"], [0x57, "KP +"], [0x58, "KP Enter"],
+  ...Array.from({ length: 9 }, (_, i) => [0x59 + i, `KP ${i + 1}`]),
+  [0x62, "KP 0"], [0x63, "KP ."], [0x65, "Menu"],
+  ...Array.from({ length: 12 }, (_, i) => [0x68 + i, `F${i + 13}`]),
+  [0xe0, "Left Ctrl"], [0xe1, "Left Shift"], [0xe2, "Left Alt"], [0xe3, "Left Win"],
+  [0xe4, "Right Ctrl"], [0xe5, "Right Shift"], [0xe6, "Right Alt"], [0xe7, "Right Win"],
+]);
 
-const mouseInputs = [
-  { label: "Mouse 1", kind: 2, code: 1 },
-  { label: "Mouse 2", kind: 2, code: 2 },
-  { label: "Mouse 3", kind: 2, code: 3 },
-  { label: "Mouse 4", kind: 2, code: 4 },
-  { label: "Move X", kind: 3, code: 0 },
-  { label: "Move Y", kind: 4, code: 0 },
-  { label: "Wheel", kind: 5, code: 0 },
-];
+const CONSUMER_NAMES = new Map([
+  [0xe9, "音量 +"], [0xea, "音量 -"], [0xe2, "靜音"], [0xcd, "播放/暫停"],
+  [0xb5, "下一首"], [0xb6, "上一首"], [0xb7, "停止"], [0x6f, "亮度 +"], [0x70, "亮度 -"],
+]);
 
-const editorInputs = [
-  ...physicalKeys.map((key, index) => ({ slot: index, label: `${key.id} ${key.label} Base`, kind: 1, code: key.baseCode })),
-  ...physicalKeys.map((key, index) => ({ slot: physicalKeys.length + index, label: `${key.id} ${key.label} Fn`, kind: 1, code: key.fnCode })),
-  ...baseOnlyKeys.map((key, index) => ({ slot: physicalKeys.length * 2 + index, label: key.label, kind: 1, code: key.code })),
-  ...mouseInputs.map((input, index) => ({ slot: physicalKeys.length * 2 + baseOnlyKeys.length + index, ...input })),
-];
+const MOUSE_BUTTON_NAMES = ["", "左鍵", "右鍵", "中鍵", "側鍵 (上一頁)", "側鍵 (下一頁)", "按鍵 6", "按鍵 7", "按鍵 8"];
 
-const keyboardOutputs = [
-  ["A", 0x04], ["B", 0x05], ["C", 0x06], ["D", 0x07], ["E", 0x08], ["F", 0x09],
-  ["G", 0x0a], ["H", 0x0b], ["I", 0x0c], ["J", 0x0d], ["K", 0x0e], ["L", 0x0f],
-  ["M", 0x10], ["N", 0x11], ["O", 0x12], ["P", 0x13], ["Q", 0x14], ["R", 0x15],
-  ["S", 0x16], ["T", 0x17], ["U", 0x18], ["V", 0x19], ["W", 0x1a], ["X", 0x1b],
-  ["Y", 0x1c], ["Z", 0x1d],
-  ["1", 0x1e], ["2", 0x1f], ["3", 0x20], ["4", 0x21], ["5", 0x22],
-  ["6", 0x23], ["7", 0x24], ["8", 0x25], ["9", 0x26], ["0", 0x27],
-  ["Enter", 0x28], ["Esc", 0x29], ["Backspace", 0x2a], ["Tab", 0x2b], ["Space", 0x2c],
-  ["-", 0x2d], ["=", 0x2e], ["[", 0x2f], ["]", 0x30], ["\\\\", 0x31],
-  [";", 0x33], ["'", 0x34], ["`", 0x35], [",", 0x36], [".", 0x37], ["/", 0x38],
-  ["Caps Lock", 0x39],
-  ["F1", 0x3a], ["F2", 0x3b], ["F3", 0x3c], ["F4", 0x3d], ["F5", 0x3e], ["F6", 0x3f],
-  ["F7", 0x40], ["F8", 0x41], ["F9", 0x42], ["F10", 0x43], ["F11", 0x44], ["F12", 0x45],
-  ["Print Screen", 0x46], ["Scroll Lock", 0x47], ["Pause", 0x48],
-  ["Insert", 0x49], ["Home", 0x4a], ["Page Up", 0x4b], ["Delete", 0x4c], ["End", 0x4d], ["Page Down", 0x4e],
-  ["Right", 0x4f], ["Left", 0x50], ["Down", 0x51], ["Up", 0x52],
-  ["Num Lock", 0x53], ["KP /", 0x54], ["KP *", 0x55], ["KP -", 0x56], ["KP +", 0x57],
-  ["KP Enter", 0x58], ["KP 1", 0x59], ["KP 2", 0x5a], ["KP 3", 0x5b], ["KP 4", 0x5c],
-  ["KP 5", 0x5d], ["KP 6", 0x5e], ["KP 7", 0x5f], ["KP 8", 0x60], ["KP 9", 0x61],
-  ["KP 0", 0x62], ["KP .", 0x63],
-  ["Application", 0x65], ["Power", 0x66],
-  ["KP =", 0x67],
-  ["F13", 0x68], ["F14", 0x69], ["F15", 0x6a], ["F16", 0x6b], ["F17", 0x6c],
-  ["F18", 0x6d], ["F19", 0x6e], ["F20", 0x6f], ["F21", 0x70], ["F22", 0x71],
-  ["F23", 0x72], ["F24", 0x73],
-  ["Left Ctrl", 0xe0], ["Left Shift", 0xe1], ["Left Alt", 0xe2], ["Left GUI", 0xe3],
-  ["Right Ctrl", 0xe4], ["Right Shift", 0xe5], ["Right Alt", 0xe6], ["Right GUI", 0xe7],
-];
-
-const keyOutputs = [
-  ["None", 0, 0],
-  ...keyboardOutputs.map(([label, code]) => [label, 1, code]),
-  ["Mouse 1", 2, 1],
-  ["Mouse 2", 2, 2],
-  ["Mouse 3", 2, 3],
-  ["Mouse 4", 2, 4],
-  ["Move X", 3, 0],
-  ["Move Y", 4, 0],
-  ["Wheel", 5, 0],
-  ["Volume Up", 7, 0xe9],
-  ["Volume Down", 7, 0xea],
-  ["Mute", 7, 0xe2],
-  ["Play/Pause", 7, 0xcd],
-  ["Next Track", 7, 0xb5],
-  ["Prev Track", 7, 0xb6],
-  ["Layer 0 Base", 6, 0],
-  ["Layer 1 Nav", 6, 1],
-  ["Layer 2 Media", 6, 2],
-  ["Layer 3 Game", 6, 3],
-  ["Next Layer", 8, 0],
-];
+const els = Object.fromEntries(
+  [
+    "connect", "bootloader", "status", "active-layers", "edit-layers", "layer-rule",
+    "last-input", "last-output", "last-layer", "event-log", "event-hide-motion", "event-pause", "event-clear",
+    "raw-log", "raw-filter", "raw-hide-motion", "raw-pause", "raw-clear", "release-all", "key-sink",
+    "save-config", "reset-config", "learn", "learn-hint", "add-input", "add-manual", "binding-list",
+    "board", "firmware", "protocol", "refresh-host", "host-status", "host-vidpid", "host-line", "interfaces",
+  ].map((id) => [id.replace(/-(\w)/g, (_, c) => c.toUpperCase()), document.getElementById(id)]),
+);
 
 const state = {
   device: null,
-  sequence: 1,
+  sequence: 0,
   pending: new Map(),
-  inputPoll: null,
-  lastInputCount: 0,
+  queue: Promise.resolve(),
+  polling: false,
+  rawAfter: 0,
+  eventAfter: 0,
+  rawPaused: false,
+  eventPaused: false,
+  activeLayer: 0,
+  editLayer: 0,
+  bindings: [],
+  dirty: false,
+  learning: false,
+  tab: "monitor",
+  interfaces: [],
 };
 
-const keyboardNames = new Map(keyboardOutputs.map(([label, code]) => [code, label]));
+// ---------------------------------------------------------------- naming
 
-const els = {
-  connect: document.querySelector("#connect"),
-  bootloader: document.querySelector("#bootloader"),
-  status: document.querySelector("#status"),
-  board: document.querySelector("#board"),
-  firmware: document.querySelector("#firmware"),
-  protocol: document.querySelector("#protocol"),
-  layer: document.querySelector("#layer"),
-  profiles: document.querySelector("#profiles"),
-  bindings: document.querySelector("#bindings"),
-  debug: document.querySelector("#debug"),
-  keyGrid: document.querySelector("#key-grid"),
-  baseKeyGrid: document.querySelector("#base-key-grid"),
-  keySink: document.querySelector("#key-sink"),
-  releaseAll: document.querySelector("#release-all"),
-  mappingTable: document.querySelector("#mapping-table"),
-  saveConfig: document.querySelector("#save-config"),
-  resetConfig: document.querySelector("#reset-config"),
-  inputEvent: document.querySelector("#input-event"),
-  inputName: document.querySelector("#input-name"),
-  inputRaw: document.querySelector("#input-raw"),
-};
+function keyName(code) {
+  const name = KEY_NAMES.get(code) ?? `Key 0x${hex(code)}`;
+  const physical = PHYSICAL_BY_CODE.get(code);
+  return physical ? `${name} [${physical}]` : name;
+}
+
+function inputName(kind, code) {
+  switch (kind) {
+    case IN.KEY: return keyName(code);
+    case IN.MOUSE_BUTTON: return `滑鼠 ${MOUSE_BUTTON_NAMES[code] ?? code}`;
+    case IN.REL_X: return "搖桿 / 滑鼠 X";
+    case IN.REL_Y: return "搖桿 / 滑鼠 Y";
+    case IN.WHEEL: return "滾輪";
+    case IN.CONSUMER: return `多媒體 ${CONSUMER_NAMES.get(code) ?? `0x${hex(code)}`}`;
+    default: return `未知 ${kind}:${code}`;
+  }
+}
+
+function outputName(kind, code) {
+  switch (kind) {
+    case OUT.NONE: return "（無輸出）";
+    case OUT.KEY: return KEY_NAMES.get(code) ?? `Key 0x${hex(code)}`;
+    case OUT.MOUSE_BUTTON: return `滑鼠 ${MOUSE_BUTTON_NAMES[code] ?? code}`;
+    case OUT.REL_X: return "滑鼠 X";
+    case OUT.REL_Y: return "滑鼠 Y";
+    case OUT.WHEEL: return "滾輪";
+    case OUT.CONSUMER: return CONSUMER_NAMES.get(code) ?? `多媒體 0x${hex(code)}`;
+    case OUT.LAYER: return `切到 ${LAYER_NAMES[code] ?? code}`;
+    case OUT.LAYER_HOLD: return `按住時 ${LAYER_NAMES[code] ?? code}`;
+    case OUT.NEXT_LAYER: return "下一個 Layer";
+    case OUT.BLOCK: return "停用";
+    default: return `未知 ${kind}:${code}`;
+  }
+}
+
+function isMotion(kind) {
+  return kind === IN.REL_X || kind === IN.REL_Y || kind === IN.WHEEL;
+}
+
+function hex(value, width = 2) {
+  return value.toString(16).padStart(width, "0");
+}
 
 function setStatus(text) {
   els.status.textContent = text;
 }
 
-function nextSequence() {
-  state.sequence = (state.sequence + 1) & 0xff;
-  if (state.sequence === 0) {
-    state.sequence = 1;
-  }
-  return state.sequence;
-}
-
-function parseCString(bytes) {
-  const end = bytes.indexOf(0);
-  return new TextDecoder().decode(bytes.slice(0, end >= 0 ? end : bytes.length));
-}
+// ---------------------------------------------------------------- transport
 
 function onInputReport(event) {
   const data = new Uint8Array(event.data.buffer);
-  const command = data[0];
-  const sequence = data[1];
-  const length = data[2];
-  const status = data[3];
-  const payload = data.slice(4, 4 + length);
-  const pending = state.pending.get(sequence);
-
+  const pending = state.pending.get(data[1]);
   if (!pending) {
     return;
   }
-
-  state.pending.delete(sequence);
-  pending.resolve({ command, sequence, status, payload });
+  state.pending.delete(data[1]);
+  pending({ command: data[0], status: data[3], payload: data.slice(4, 4 + data[2]) });
 }
 
-async function request(command, payload = new Uint8Array()) {
-  if (!state.device?.opened) {
-    throw new Error("Device is not open");
-  }
-
-  const sequence = nextSequence();
+function sendRequest(command, payload) {
+  state.sequence = (state.sequence % 255) + 1;
+  const sequence = state.sequence;
   const report = new Uint8Array(REPORT_SIZE);
   report[0] = command;
   report[1] = sequence;
   report[2] = payload.length;
   report.set(payload, 4);
 
-  const response = new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       state.pending.delete(sequence);
-      reject(new Error("Timed out waiting for device"));
+      reject(new Error("裝置沒有回應"));
     }, 1000);
-
-    state.pending.set(sequence, {
-      resolve: (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
+    state.pending.set(sequence, (value) => {
+      clearTimeout(timer);
+      resolve(value);
+    });
+    state.device.sendReport(0, report).catch((error) => {
+      clearTimeout(timer);
+      state.pending.delete(sequence);
+      reject(error);
     });
   });
-
-  await state.device.sendReport(0, report);
-  return response;
 }
 
-async function refreshInfo() {
-  const response = await request(CMD_GET_INFO);
-  if (response.status !== 0) {
-    throw new Error(`Get info failed: ${response.status}`);
+// Requests are serialized so polling and edits never interleave.
+function request(command, payload = []) {
+  if (!state.device?.opened) {
+    return Promise.reject(new Error("尚未連線"));
   }
-
-  const p = response.payload;
-  els.protocol.textContent = `${p[0]}.${p[1]}`;
-  els.firmware.textContent = `${p[2]}.${p[3]}.${p[4]}`;
-  els.layer.textContent = String(p[5]);
-  els.board.textContent = parseCString(p.slice(7));
-
-  await refreshConfig();
+  const run = state.queue.then(() => sendRequest(command, Uint8Array.from(payload)));
+  state.queue = run.catch(() => {});
+  return run.then((response) => {
+    if (response.status !== 0) {
+      throw new Error(`指令 0x${hex(command)} 失敗（status ${response.status}）`);
+    }
+    return response.payload;
+  });
 }
 
-function setActiveLayerButton(layer) {
-  document.querySelectorAll("[data-layer]").forEach((button) => {
+const u16 = (p, i) => p[i] | (p[i + 1] << 8);
+const s16 = (p, i) => (u16(p, i) << 16) >> 16;
+const u32 = (p, i) => (p[i] | (p[i + 1] << 8) | (p[i + 2] << 16) | (p[i + 3] << 24)) >>> 0;
+const le32 = (v) => [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >>> 24) & 0xff];
+const le16 = (v) => [v & 0xff, (v >> 8) & 0xff];
+
+// ---------------------------------------------------------------- layers
+
+function renderLayerButtons(container, onClick) {
+  container.replaceChildren(
+    ...LAYER_NAMES.map((name, layer) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.layer = layer;
+      button.textContent = name;
+      button.addEventListener("click", () => onClick(layer));
+      return button;
+    }),
+  );
+}
+
+function markLayer(container, layer) {
+  container.querySelectorAll("button").forEach((button) => {
     button.classList.toggle("active", Number(button.dataset.layer) === layer);
   });
 }
 
-async function refreshConfig() {
-  const response = await request(CMD_GET_CONFIG_SUMMARY);
-  if (response.status !== 0) {
-    throw new Error(`Get config failed: ${response.status}`);
-  }
-
-  const p = response.payload;
-  els.profiles.textContent = `${p[0]} profile, ${p[1]} layers`;
-  els.bindings.textContent = `${p[2]} slots/layer`;
-  els.layer.textContent = String(p[4]);
-  setActiveLayerButton(p[4]);
-  await loadBindings(p[4]);
+function showActiveLayer(layer) {
+  state.activeLayer = layer;
+  markLayer(els.activeLayers, layer);
 }
 
-async function getBinding(layer, slot) {
-  const response = await request(CMD_GET_BINDING, new Uint8Array([layer, slot]));
-  if (response.status !== 0) {
-    throw new Error(`Get binding failed: ${response.status}`);
-  }
-  const p = response.payload;
-  return {
-    layer: p[0],
-    slot: p[1],
-    inputKind: p[2],
-    inputCode: p[3],
-    outputKind: p[4],
-    outputCode: p[5],
-    scale: new DataView(p.buffer, p.byteOffset, p.byteLength).getInt16(6, true),
-  };
-}
-
-async function setBinding(layer, slot, inputKind, inputCode, outputKind, outputCode, scale = 1000) {
-  const [scaleLo, scaleHi] = int16Bytes(scale);
-  const response = await request(CMD_SET_BINDING, new Uint8Array([
-    layer,
-    slot,
-    inputKind,
-    inputCode,
-    outputKind,
-    outputCode,
-    scaleLo,
-    scaleHi,
-  ]));
-  if (response.status !== 0) {
-    throw new Error(`Set binding failed: ${response.status}`);
+async function setActiveLayer(layer) {
+  try {
+    const p = await request(CMD.SET_ACTIVE_LAYER, [layer]);
+    showActiveLayer(p[0]);
+  } catch (error) {
+    setStatus(error.message);
   }
 }
 
-function outputValue(kind, code) {
-  return `${kind}:${code}`;
+// ---------------------------------------------------------------- monitor
+
+const MAX_LOG_ROWS = 500;
+
+// Newest rows go on top. While the user has scrolled down to read, the view is
+// frozen and new rows wait in a buffer, so the list does not move under them.
+const logBuffers = new Map();
+
+function appendLog(container, row) {
+  if (container.scrollTop > 4) {
+    const buffer = logBuffers.get(container) ?? [];
+    buffer.push(row);
+    if (buffer.length > MAX_LOG_ROWS) buffer.shift();
+    logBuffers.set(container, buffer);
+    container.dataset.frozen = String(buffer.length);
+    return;
+  }
+  container.prepend(row);
+  while (container.childElementCount > MAX_LOG_ROWS) {
+    container.lastElementChild.remove();
+  }
 }
 
-function makeOutputSelect(row, binding, layer) {
-  const select = document.createElement("select");
-  keyOutputs.forEach(([label, kind, code]) => {
-    const option = document.createElement("option");
-    option.value = outputValue(kind, code);
-    option.textContent = label;
-    select.append(option);
-  });
-  select.value = outputValue(binding.outputKind, binding.outputCode);
-  if (!select.value) {
-    select.value = "0:0";
+function flushLog(container) {
+  const buffer = logBuffers.get(container);
+  if (!buffer?.length || container.scrollTop > 4) return;
+  logBuffers.delete(container);
+  delete container.dataset.frozen;
+  for (const row of buffer) appendLog(container, row);
+}
+
+function timeStamp() {
+  const now = new Date();
+  return `${now.toLocaleTimeString("en-GB")}.${String(now.getMilliseconds()).padStart(3, "0")}`;
+}
+
+function logRow(...cells) {
+  const row = document.createElement("div");
+  row.className = "log-row";
+  for (const [text, className] of cells) {
+    const cell = document.createElement("span");
+    cell.textContent = text;
+    if (className) {
+      cell.className = className;
+    }
+    row.append(cell);
   }
-  select.addEventListener("change", async () => {
-    const [outputKind, outputCode] = select.value.split(":").map(Number);
+  return row;
+}
+
+function describeRaw(instance, bytes) {
+  const itf = state.interfaces[instance];
+  if (!itf?.parsed?.usesReportId) {
+    return "";
+  }
+  const kind = itf.parsed.reportKinds.get(bytes[0]);
+  return kind ? `ID ${bytes[0]} ${kind}` : `ID ${bytes[0]}`;
+}
+
+const lastRawReport = new Map();
+
+// True when a report differs from the previous one with the same report ID
+// only inside relative-axis fields (stick / wheel movement, no button change).
+function isMotionOnlyReport(instance, bytes) {
+  const parsed = state.interfaces[instance]?.parsed;
+  if (!parsed) return false;
+  const reportId = parsed.usesReportId ? bytes[0] : 0;
+  const skip = parsed.usesReportId ? 8 : 0;
+  const ranges = parsed.relativeBits.get(reportId);
+  const key = `${instance}:${reportId}`;
+  const previous = lastRawReport.get(key);
+  lastRawReport.set(key, bytes);
+  if (!ranges?.length || !previous || previous.length !== bytes.length) return false;
+
+  for (let bit = skip; bit < bytes.length * 8; bit++) {
+    if (ranges.some(([start, end]) => bit - skip >= start && bit - skip < end)) continue;
+    const mask = 1 << (bit % 8);
+    if ((bytes[bit >> 3] & mask) !== (previous[bit >> 3] & mask)) return false;
+  }
+  return true;
+}
+
+async function pollRaw() {
+  const p = await request(CMD.GET_RAW_REPORTS, le32(state.rawAfter));
+  let pos = 6;
+  if (p[1] & 1 && !state.rawPaused) {
+    appendLog(els.rawLog, logRow([timeStamp(), "muted"], ["…有封包來不及讀取而遺失", "warn"]));
+  }
+  for (let n = 0; n < p[0]; n++) {
+    const seq = u32(p, pos);
+    const instance = p[pos + 4] & 0x7f;
+    const truncated = p[pos + 4] & 0x80;
+    const len = p[pos + 5];
+    const bytes = p.slice(pos + 6, pos + 6 + len);
+    pos += 6 + len;
+    state.rawAfter = seq;
+
+    const filter = els.rawFilter.value;
+    const motionOnly = isMotionOnlyReport(instance, bytes);
+    if (state.rawPaused || (filter !== "all" && Number(filter) !== instance) || (motionOnly && els.rawHideMotion.checked)) {
+      continue;
+    }
+    const hexText = Array.from(bytes, (b) => hex(b)).join(" ") + (truncated ? " …" : "");
+    appendLog(els.rawLog, logRow(
+      [timeStamp(), "muted"],
+      [`介面 ${instance}`, "tag"],
+      [describeRaw(instance, bytes), "muted"],
+      [hexText, "mono"],
+    ));
+  }
+  if (!p[0]) {
+    state.rawAfter = Math.max(state.rawAfter, u32(p, 2));
+  }
+}
+
+async function pollEvents() {
+  const p = await request(CMD.GET_EVENT_LOG, le32(state.eventAfter));
+  let pos = 6;
+  for (let n = 0; n < p[0]; n++) {
+    const event = {
+      seq: u32(p, pos),
+      inKind: p[pos + 4], inCode: p[pos + 5], inValue: s16(p, pos + 6),
+      outKind: p[pos + 8], outCode: p[pos + 9], outValue: s16(p, pos + 10),
+      layer: p[pos + 12] & 0x7f, simulated: Boolean(p[pos + 12] & 0x80),
+    };
+    pos += 13;
+    state.eventAfter = event.seq;
+    handleEvent(event);
+  }
+  if (!p[0]) {
+    state.eventAfter = Math.max(state.eventAfter, u32(p, 2));
+  }
+}
+
+function handleEvent(event) {
+  const motion = isMotion(event.inKind);
+  const inText = motion
+    ? `${inputName(event.inKind, event.inCode)} ${event.inValue > 0 ? "+" : ""}${event.inValue}`
+    : `${inputName(event.inKind, event.inCode)} ${event.inValue ? "按下" : "放開"}`;
+  const outText = event.outKind === OUT.NONE ? "（無輸出）" : `${outputName(event.outKind, event.outCode)}${motion ? ` ${event.outValue}` : ""}`;
+
+  if (state.learning && !event.simulated && (motion || event.inValue)) {
+    finishLearn(event.inKind, motion ? 0 : event.inCode);
+  }
+
+  if (!motion || !els.eventHideMotion.checked) {
+    els.lastInput.textContent = inText + (event.simulated ? "（模擬）" : "");
+    els.lastOutput.textContent = outText;
+    els.lastLayer.textContent = LAYER_NAMES[event.layer] ?? event.layer;
+  }
+
+  if (state.eventPaused || (motion && els.eventHideMotion.checked)) {
+    return;
+  }
+  appendLog(els.eventLog, logRow(
+    [timeStamp(), "muted"],
+    [inText, event.simulated ? "muted" : ""],
+    ["→", "muted"],
+    [outText, event.outKind === OUT.BLOCK ? "warn" : ""],
+    [LAYER_NAMES[event.layer] ?? String(event.layer), `tag layer-${event.layer}`],
+  ));
+}
+
+async function pollLoop() {
+  let tick = 0;
+  while (state.polling && state.device?.opened) {
     try {
-      await setBinding(layer, row.slot, row.kind, row.code, outputKind, outputCode);
-      setStatus("Changed; press Save to persist");
+      if (state.tab === "monitor" || state.learning) {
+        await pollEvents();
+        if (state.tab === "monitor") {
+          await pollRaw();
+        }
+      }
+      if (tick++ % 10 === 0) {
+        const p = await request(CMD.GET_LAYER_STATE);
+        if (p[0] !== state.activeLayer) {
+          showActiveLayer(p[0]);
+        }
+      }
     } catch (error) {
       setStatus(error.message);
     }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function simulate(kind, code, value) {
+  await request(CMD.SIMULATE_INPUT, [kind, code, ...le16(value)]);
+}
+
+// ---------------------------------------------------------------- bindings
+
+function bindingPayload(layer, slot, b) {
+  return [layer, slot, b.inKind, b.inCode, b.outKind, b.outCode, ...le16(b.scale)];
+}
+
+async function loadBindings(layer) {
+  const bindings = [];
+  for (let slot = 0; slot < BINDING_COUNT; slot++) {
+    const p = await request(CMD.GET_BINDING, [layer, slot]);
+    bindings.push({ slot, inKind: p[2], inCode: p[3], outKind: p[4], outCode: p[5], scale: s16(p, 6) });
+  }
+  state.bindings = bindings;
+  renderBindings();
+}
+
+async function writeBinding(binding) {
+  await request(CMD.SET_BINDING, bindingPayload(state.editLayer, binding.slot, binding));
+  state.dirty = true;
+  updateDirty();
+}
+
+function updateDirty() {
+  els.saveConfig.textContent = state.dirty ? "儲存到裝置 *" : "儲存到裝置";
+  if (state.dirty) {
+    setStatus("已套用到裝置，但還沒儲存；拔掉後會遺失");
+  }
+}
+
+function outputOptions(inKind) {
+  const groups = [];
+  const motionIn = isMotion(inKind);
+  groups.push(["", [
+    [OUT.NONE, 0, state.editLayer === 0 ? "原樣輸出（預設）" : "沿用 Base（預設）"],
+    [OUT.BLOCK, 0, "停用（不輸出）"],
+  ]]);
+  groups.push(["滑鼠", [
+    [OUT.REL_X, 0, "滑鼠 X"], [OUT.REL_Y, 0, "滑鼠 Y"], [OUT.WHEEL, 0, "滾輪"],
+    ...(motionIn ? [] : [1, 2, 3, 4, 5].map((n) => [OUT.MOUSE_BUTTON, n, `滑鼠 ${MOUSE_BUTTON_NAMES[n]}`])),
+  ]]);
+  if (!motionIn) {
+    groups.push(["Layer", [
+      ...LAYER_NAMES.map((name, i) => [OUT.LAYER_HOLD, i, `按住時切到 ${name}`]),
+      ...LAYER_NAMES.map((name, i) => [OUT.LAYER, i, `按一下切到 ${name}`]),
+      [OUT.NEXT_LAYER, 0, "按一下切到下一個 Layer"],
+    ]]);
+    groups.push(["多媒體", [...CONSUMER_NAMES].map(([code, name]) => [OUT.CONSUMER, code, name])]);
+    groups.push(["鍵盤", [...KEY_NAMES].map(([code, name]) => [OUT.KEY, code, name])]);
+  }
+  return groups;
+}
+
+function makeOutputSelect(binding, onChange) {
+  const select = document.createElement("select");
+  for (const [label, options] of outputOptions(binding.inKind)) {
+    const parent = label ? document.createElement("optgroup") : select;
+    if (label) {
+      parent.label = label;
+      select.append(parent);
+    }
+    for (const [kind, code, name] of options) {
+      const option = document.createElement("option");
+      option.value = `${kind}:${code}`;
+      option.textContent = name;
+      parent.append(option);
+    }
+  }
+  select.value = `${binding.outKind}:${binding.outCode}`;
+  if (select.selectedIndex < 0) {
+    const option = document.createElement("option");
+    option.value = select.value = `${binding.outKind}:${binding.outCode}`;
+    option.textContent = outputName(binding.outKind, binding.outCode);
+    select.append(option);
+    select.value = option.value;
+  }
+  select.addEventListener("change", () => {
+    const [kind, code] = select.value.split(":").map(Number);
+    onChange(kind, code);
   });
   return select;
 }
 
-async function loadBindings(layer) {
-  const header = document.createElement("div");
-  header.className = "mapping-row header";
-  header.innerHTML = "<div>Input</div><div>Source</div><div>Output</div>";
-  const rows = [header];
-
-  for (const row of editorInputs) {
-    const binding = await getBinding(layer, row.slot);
-    const line = document.createElement("div");
-    line.className = "mapping-row";
-    const input = document.createElement("div");
-    input.textContent = row.label;
-    const source = document.createElement("div");
-    source.textContent = `${row.kind}:${row.code}`;
-    line.append(input, source, makeOutputSelect(row, binding, layer));
-    rows.push(line);
-  }
-
-  els.mappingTable.replaceChildren(...rows);
-}
-
-function int16Bytes(value) {
-  const normalized = value < 0 ? 0x10000 + value : value;
-  return [normalized & 0xff, (normalized >> 8) & 0xff];
-}
-
-async function simulate(kind, code, value) {
-  const payload = new Uint8Array([kind, code, ...int16Bytes(value)]);
-  const response = await request(CMD_SIMULATE_INPUT, payload);
-  if (response.status !== 0) {
-    throw new Error(`Simulate failed: ${response.status}`);
-  }
-  await refreshOutput();
-}
-
-async function tapKey(code) {
-  await simulate(1, code, 1);
-  await new Promise((resolve) => setTimeout(resolve, 80));
-  await simulate(1, code, 0);
-}
-
-async function tapMouse(button) {
-  await simulate(2, button, 1);
-  await new Promise((resolve) => setTimeout(resolve, 180));
-  await simulate(2, button, 0);
-  await new Promise((resolve) => setTimeout(resolve, 80));
-  await releaseAll();
-}
-
-async function releaseAll() {
-  const response = await request(CMD_RELEASE_ALL);
-  if (response.status !== 0) {
-    throw new Error(`Release failed: ${response.status}`);
-  }
-  await refreshOutput();
-}
-
-async function refreshOutput() {
-  const response = await request(CMD_GET_OUTPUT_STATE);
-  if (response.status !== 0) {
-    throw new Error(`Get output failed: ${response.status}`);
-  }
-
-  const p = response.payload;
-  const value = new DataView(p.buffer, p.byteOffset, p.byteLength).getInt16(2, true);
-  const count = new DataView(p.buffer, p.byteOffset, p.byteLength).getUint32(4, true);
-  els.debug.textContent = JSON.stringify({
-    kind: p[0],
-    code: p[1],
-    value,
-    count,
-  }, null, 2);
-}
-
-function inputKindName(kind) {
-  switch (kind) {
-    case 1: return "Key";
-    case 2: return "Mouse button";
-    case 3: return "Move X";
-    case 4: return "Move Y";
-    case 5: return "Wheel";
-    default: return "None";
-  }
-}
-
-function inputName(kind, code) {
-  if (kind === 1) {
-    return keyboardNames.get(code) ?? `HID 0x${code.toString(16).padStart(2, "0")}`;
-  }
-  if (kind === 2) {
-    return `Mouse ${code}`;
-  }
-  if (kind === 3) {
-    return "Relative X";
-  }
-  if (kind === 4) {
-    return "Relative Y";
-  }
-  if (kind === 5) {
-    return "Wheel";
-  }
-  return "-";
-}
-
-async function refreshInputEvent() {
-  const response = await request(CMD_GET_INPUT_EVENT);
-  if (response.status !== 0) {
-    throw new Error(`Get input failed: ${response.status}`);
-  }
-
-  const p = response.payload;
-  const view = new DataView(p.buffer, p.byteOffset, p.byteLength);
-  const value = view.getInt16(2, true);
-  const count = view.getUint32(4, true);
-  if (count === state.lastInputCount) {
+function renderBindings() {
+  const rows = state.bindings.filter((b) => b.inKind !== 0);
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = state.editLayer === 0
+      ? "Base 沒有任何綁定：所有按鍵、滑鼠、搖桿都原樣輸出。"
+      : `${LAYER_NAMES[state.editLayer]} 沒有任何綁定：全部沿用 Base。`;
+    els.bindingList.replaceChildren(empty);
     return;
   }
 
-  state.lastInputCount = count;
-  els.inputEvent.textContent = `${inputKindName(p[0])} ${value ? "down/move" : "up"}`;
-  els.inputName.textContent = inputName(p[0], p[1]);
-  els.inputRaw.textContent = `kind=${p[0]} code=${p[1]} value=${value} count=${count}`;
-}
+  els.bindingList.replaceChildren(...rows.map((binding) => {
+    const row = document.createElement("div");
+    row.className = "binding-row";
 
-function startInputPolling() {
-  if (state.inputPoll) {
-    clearInterval(state.inputPoll);
-  }
+    const input = document.createElement("div");
+    input.className = "binding-input";
+    input.textContent = inputName(binding.inKind, binding.inCode);
 
-  state.inputPoll = setInterval(() => {
-    if (!state.device?.opened || state.pending.size > 2) {
-      return;
+    const select = makeOutputSelect(binding, async (kind, code) => {
+      binding.outKind = kind;
+      binding.outCode = code;
+      await writeBinding(binding).catch((error) => setStatus(error.message));
+      renderBindings();
+    });
+
+    const scale = document.createElement("label");
+    scale.className = "scale";
+    if (isMotion(binding.inKind) || isMotion(binding.outKind)) {
+      const field = document.createElement("input");
+      field.type = "number";
+      field.step = "10";
+      field.value = binding.scale / 10;
+      field.title = "倍率 %，負數代表反向";
+      field.addEventListener("change", async () => {
+        binding.scale = Math.max(-32000, Math.min(32000, Math.round(Number(field.value) * 10)));
+        await writeBinding(binding).catch((error) => setStatus(error.message));
+      });
+      scale.append(field, " %");
     }
-    refreshInputEvent().catch((error) => setStatus(error.message));
-  }, 120);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "移除";
+    remove.addEventListener("click", async () => {
+      Object.assign(binding, { inKind: 0, inCode: 0, outKind: 0, outCode: 0, scale: 0 });
+      await writeBinding(binding).catch((error) => setStatus(error.message));
+      renderBindings();
+    });
+
+    row.append(input, select, scale, remove);
+    return row;
+  }));
 }
+
+async function addBinding(inKind, inCode) {
+  const existing = state.bindings.find((b) => b.inKind === inKind && b.inCode === inCode);
+  if (existing) {
+    setStatus(`${inputName(inKind, inCode)} 已經在清單中`);
+    renderBindings();
+    return;
+  }
+  const free = state.bindings.find((b) => b.inKind === 0);
+  if (!free) {
+    setStatus(`這個 layer 已經用滿 ${BINDING_COUNT} 個綁定`);
+    return;
+  }
+  // A new row starts as an identity mapping so nothing changes until the user picks an output.
+  const identity = { [IN.KEY]: OUT.KEY, [IN.MOUSE_BUTTON]: OUT.MOUSE_BUTTON, [IN.REL_X]: OUT.REL_X, [IN.REL_Y]: OUT.REL_Y, [IN.WHEEL]: OUT.WHEEL, [IN.CONSUMER]: OUT.CONSUMER };
+  Object.assign(free, { inKind, inCode, outKind: identity[inKind], outCode: inCode, scale: 1000 });
+  await writeBinding(free);
+  renderBindings();
+  setStatus(`已新增 ${inputName(inKind, inCode)}，請選擇輸出`);
+}
+
+function startLearn() {
+  state.learning = true;
+  els.learn.textContent = "取消";
+  els.learnHint.hidden = false;
+}
+
+function stopLearn() {
+  state.learning = false;
+  els.learn.textContent = "按手把新增";
+  els.learnHint.hidden = true;
+}
+
+function finishLearn(kind, code) {
+  stopLearn();
+  addBinding(kind, code).catch((error) => setStatus(error.message));
+}
+
+function renderManualInputs() {
+  const options = [
+    ...HANDLE_KEYS.map((code) => [IN.KEY, code]),
+    [IN.MOUSE_BUTTON, 1], [IN.MOUSE_BUTTON, 2], [IN.MOUSE_BUTTON, 3], [IN.MOUSE_BUTTON, 4], [IN.MOUSE_BUTTON, 5],
+    [IN.REL_X, 0], [IN.REL_Y, 0], [IN.WHEEL, 0],
+  ];
+  els.addInput.replaceChildren(...options.map(([kind, code]) => {
+    const option = document.createElement("option");
+    option.value = `${kind}:${code}`;
+    option.textContent = inputName(kind, code);
+    return option;
+  }));
+}
+
+async function selectEditLayer(layer) {
+  state.editLayer = layer;
+  markLayer(els.editLayers, layer);
+  els.layerRule.textContent = layer === 0
+    ? "Base：沒有綁定的輸入會原樣送出。"
+    : `${LAYER_NAMES[layer]}：沒有綁定的輸入會沿用 Base 的設定（所以搖桿和其他鍵照常可用）。`;
+  if (state.device?.opened) {
+    els.bindingList.replaceChildren(Object.assign(document.createElement("p"), { className: "hint", textContent: "讀取中…" }));
+    await loadBindings(layer).catch((error) => setStatus(error.message));
+  }
+}
+
+// ---------------------------------------------------------------- device tab
+
+const HOST_STATUS = ["等待手把", "已連接目標手把", "已連接其他 HID 裝置", "手把已拔除", "接收錯誤", "USB 裝置已連接，但沒有 HID 介面"];
+const LINE_STATE = ["SE0（未連接）", "Full-speed idle", "Low-speed idle", "SE1"];
+
+// Minimal HID report descriptor decoder, for display only.
+function parseDescriptor(bytes) {
+  const lines = [];
+  const reportKinds = new Map();
+  const relativeBits = new Map();
+  const bitOffsets = new Map();
+  let reportSize = 0;
+  let reportCount = 0;
+  let usagePage = 0;
+  let reportId = 0;
+  let usesReportId = false;
+  let indent = 0;
+  const pageNames = { 0x01: "Generic Desktop", 0x07: "Keyboard", 0x08: "LED", 0x09: "Button", 0x0c: "Consumer" };
+  const collectionUsage = { "1:2": "滑鼠", "1:6": "鍵盤", "1:128": "系統", "12:1": "多媒體" };
+  let lastUsage = 0;
+
+  for (let i = 0; i < bytes.length;) {
+    const prefix = bytes[i++];
+    let size = prefix & 3;
+    if (size === 3) size = 4;
+    let value = 0;
+    for (let b = 0; b < size; b++) value |= bytes[i + b] << (8 * b);
+    const raw = Array.from(bytes.slice(i - 1, i + size), (b) => hex(b)).join(" ");
+    i += size;
+    const type = (prefix >> 2) & 3;
+    const tag = prefix >> 4;
+    let text = `item ${hex(prefix)}`;
+
+    if (type === 0) {
+      const flags = value;
+      const desc = `${flags & 1 ? "Const" : "Data"}, ${flags & 2 ? "Var" : "Array"}, ${flags & 4 ? "Rel" : "Abs"}`;
+      if (tag === 0x8) {
+        text = `Input (${desc})`;
+        const start = bitOffsets.get(reportId) ?? 0;
+        const end = start + reportSize * reportCount;
+        bitOffsets.set(reportId, end);
+        if ((flags & 7) === 6) {
+          relativeBits.set(reportId, [...(relativeBits.get(reportId) ?? []), [start, end]]);
+        }
+      }
+      else if (tag === 0x9) text = `Output (${desc})`;
+      else if (tag === 0xb) text = `Feature (${desc})`;
+      else if (tag === 0xa) {
+        text = `Collection (${["Physical", "Application", "Logical"][value] ?? value})`;
+        const kind = collectionUsage[`${usagePage}:${lastUsage}`];
+        if (kind && reportId) reportKinds.set(reportId, kind);
+      } else if (tag === 0xc) {
+        indent = Math.max(0, indent - 1);
+        text = "End Collection";
+      }
+    } else if (type === 1) {
+      const names = { 0: "Usage Page", 1: "Logical Min", 2: "Logical Max", 7: "Report Size", 8: "Report ID", 9: "Report Count" };
+      if (tag === 0) usagePage = value;
+      if (tag === 7) reportSize = value;
+      if (tag === 9) reportCount = value;
+      if (tag === 8) {
+        reportId = value;
+        usesReportId = true;
+        const kind = collectionUsage[`${usagePage}:${lastUsage}`];
+        if (kind) reportKinds.set(reportId, kind);
+      }
+      const shown = tag === 0 ? `${pageNames[value] ?? "0x" + hex(value, 2)}` : String(tag === 1 && size === 1 ? (value << 24) >> 24 : value);
+      text = `${names[tag] ?? `Global ${tag}`} (${shown})`;
+    } else if (type === 2) {
+      const names = { 0: "Usage", 1: "Usage Min", 2: "Usage Max" };
+      if (tag === 0) lastUsage = value;
+      text = `${names[tag] ?? `Local ${tag}`} (0x${hex(value)})`;
+    }
+    lines.push(`${raw.padEnd(15)} ${"  ".repeat(indent)}${text}`);
+    if (type === 0 && tag === 0xa) indent++;
+  }
+  return { lines, usesReportId, reportKinds, relativeBits };
+}
+
+async function readDescriptor(instance, length) {
+  const bytes = [];
+  while (bytes.length < length) {
+    const p = await request(CMD.GET_REPORT_DESCRIPTOR, [instance, ...le16(bytes.length)]);
+    const chunk = p.slice(5);
+    if (!chunk.length) break;
+    bytes.push(...chunk);
+  }
+  return Uint8Array.from(bytes);
+}
+
+async function refreshHost() {
+  const host = await request(CMD.GET_HOST_STATUS);
+  els.hostStatus.textContent = HOST_STATUS[host[0]] ?? host[0];
+  els.hostVidpid.textContent = host[6] || host[7] ? `${hex(u16(host, 6), 4)}:${hex(u16(host, 8), 4)}` : "-";
+  els.hostLine.textContent = LINE_STATE[host[1]] ?? host[1];
+
+  const p = await request(CMD.GET_HID_INTERFACES);
+  const interfaces = [];
+  for (let i = 0; i < p[0]; i++) {
+    const e = p.slice(1 + i * 6, 7 + i * 6);
+    const itf = { instance: i, mounted: e[0], itfProtocol: e[1], descLen: u16(e, 3), flags: e[5] };
+    if (itf.mounted && itf.descLen) {
+      itf.descriptor = await readDescriptor(i, itf.descLen);
+      itf.parsed = parseDescriptor(itf.descriptor);
+    }
+    interfaces.push(itf);
+  }
+  state.interfaces = interfaces;
+  renderInterfaces();
+}
+
+function renderInterfaces() {
+  const caps = (flags) => [
+    flags & 0x01 && "鍵盤鍵", flags & 0x02 && "滑鼠鍵", flags & 0x04 && "移動軸", flags & 0x08 && "多媒體鍵",
+  ].filter(Boolean).join("、") || "（沒有可用欄位）";
+
+  els.interfaces.replaceChildren(...state.interfaces.filter((itf) => itf.mounted).map((itf) => {
+    const box = document.createElement("details");
+    box.className = "interface";
+    const summary = document.createElement("summary");
+    const type = itf.flags & 0x80 ? "boot 模式" : "report 模式（依 descriptor 解讀）";
+    summary.textContent = `介面 ${itf.instance}：${caps(itf.flags)} · ${type} · descriptor ${itf.descLen} bytes`;
+    const pre = document.createElement("pre");
+    pre.textContent = itf.parsed ? itf.parsed.lines.join("\n") : "（沒有 descriptor）";
+    box.append(summary, pre);
+    return box;
+  }));
+}
+
+// ---------------------------------------------------------------- connection
 
 async function connect() {
   if (!("hid" in navigator)) {
-    setStatus("WebHID is not available in this browser");
+    setStatus("這個瀏覽器不支援 WebHID，請用 Chrome 或 Edge");
     return;
   }
-
   const [device] = await navigator.hid.requestDevice({
     filters: [{ vendorId: 0xcafe, productId: 0x4020, usagePage: 0xff00 }],
   });
-
   if (!device) {
     return;
   }
 
   state.device = device;
-  state.device.addEventListener("inputreport", onInputReport);
-  await state.device.open();
-  els.bootloader.disabled = false;
-  els.saveConfig.disabled = false;
-  els.resetConfig.disabled = false;
-  setStatus("Connected");
-  await refreshInfo();
-  startInputPolling();
+  device.addEventListener("inputreport", onInputReport);
+  await device.open();
+
+  const info = await request(CMD.GET_INFO);
+  els.protocol.textContent = `${info[0]}.${info[1]}`;
+  els.firmware.textContent = `${info[2]}.${info[3]}.${info[4]}`;
+  els.board.textContent = new TextDecoder().decode(info.slice(7, info.indexOf(0, 7)));
+  if (info[0] !== PROTOCOL_MAJOR) {
+    setStatus(`韌體協定版本 ${info[0]}.${info[1]} 與網頁不相容，請先燒錄新韌體（make flash）`);
+    els.bootloader.disabled = false;
+    return;
+  }
+
+  for (const el of [els.bootloader, els.saveConfig, els.resetConfig, els.learn, els.addManual, els.refreshHost]) {
+    el.disabled = false;
+  }
+  els.connect.textContent = "已連線";
+  els.connect.disabled = true;
+  showActiveLayer(info[5]);
+  setStatus("已連線");
+
+  // Skip anything that happened before connecting.
+  state.rawAfter = u32(await request(CMD.GET_RAW_REPORTS, le32(0xffffffff)), 2);
+  state.eventAfter = u32(await request(CMD.GET_EVENT_LOG, le32(0xffffffff)), 2);
+  await refreshHost();
+  await selectEditLayer(state.editLayer);
+
+  state.polling = true;
+  pollLoop();
 }
 
-els.connect.addEventListener("click", () => {
-  connect().catch((error) => setStatus(error.message));
-});
+function disconnected() {
+  state.polling = false;
+  state.device = null;
+  stopLearn();
+  els.connect.textContent = "連線";
+  els.connect.disabled = false;
+  for (const el of [els.bootloader, els.saveConfig, els.resetConfig, els.learn, els.addManual, els.refreshHost]) {
+    el.disabled = true;
+  }
+  setStatus("裝置已斷線");
+}
+
+// ---------------------------------------------------------------- wiring
+
+function showTab(tab) {
+  state.tab = tab;
+  document.querySelectorAll("[data-tab]").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab));
+  document.querySelectorAll(".tab-page").forEach((page) => { page.hidden = page.id !== `tab-${tab}`; });
+  if (tab !== "remap") {
+    stopLearn();
+  }
+}
+
+document.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => showTab(button.dataset.tab)));
+
+els.connect.addEventListener("click", () => connect().catch((error) => setStatus(error.message)));
 
 els.bootloader.addEventListener("click", async () => {
-  try {
-    await request(CMD_REBOOT_BOOTSEL);
-    setStatus("Rebooting to BOOTSEL");
-  } catch (error) {
-    setStatus(error.message);
-  }
+  if (!confirm("讓 RP2040 重開進入 BOOTSEL（燒錄模式）？")) return;
+  await request(CMD.REBOOT_BOOTSEL).catch(() => {});
+  setStatus("已重開進 BOOTSEL，請執行 make flash");
 });
 
 els.saveConfig.addEventListener("click", async () => {
   try {
-    const response = await request(CMD_SAVE_CONFIG);
-    if (response.status !== 0) {
-      throw new Error(`Save failed: ${response.status}`);
-    }
-    setStatus("Saved to device");
+    await request(CMD.SAVE_CONFIG);
+    state.dirty = false;
+    updateDirty();
+    setStatus("已儲存到裝置 flash");
   } catch (error) {
     setStatus(error.message);
   }
 });
 
 els.resetConfig.addEventListener("click", async () => {
+  if (!confirm("清空所有 layer 的綁定並儲存？所有輸入會恢復成原樣輸出。")) return;
   try {
-    const response = await request(CMD_RESET_CONFIG);
-    if (response.status !== 0) {
-      throw new Error(`Reset failed: ${response.status}`);
-    }
-    setStatus("Reset defaults");
-    await refreshConfig();
+    await request(CMD.RESET_CONFIG);
+    state.dirty = false;
+    updateDirty();
+    await loadBindings(state.editLayer);
+    setStatus("已清空並儲存");
   } catch (error) {
     setStatus(error.message);
   }
 });
 
-function renderPhysicalKeys() {
-  const makeKeyButton = (key, showFn) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.dataset.keyCode = String(key.code);
-    button.innerHTML = showFn ? key.html : `${key.label}<span>0x${key.code.toString(16)}</span>`;
-    button.addEventListener("click", async () => {
-      try {
-        els.keySink.focus();
-        await tapKey(key.code);
-      } catch (error) {
-        setStatus(error.message);
-      }
-    });
-    return button;
-  };
+els.learn.addEventListener("click", () => (state.learning ? stopLearn() : startLearn()));
+els.addManual.addEventListener("click", () => {
+  const [kind, code] = els.addInput.value.split(":").map(Number);
+  addBinding(kind, code).catch((error) => setStatus(error.message));
+});
 
-  els.keyGrid.replaceChildren(...physicalKeys.flatMap((key) => [
-    makeKeyButton({ code: key.baseCode, html: `${key.id}: Base<span>${key.base}</span>` }, true),
-    makeKeyButton({ code: key.fnCode, html: `${key.id}: Fn<span>${key.fn}</span>` }, true),
-  ]));
-  els.baseKeyGrid.replaceChildren(...baseOnlyKeys.map((key) => makeKeyButton(key, false)));
+els.refreshHost.addEventListener("click", () => refreshHost().catch((error) => setStatus(error.message)));
+
+els.eventPause.addEventListener("click", () => {
+  state.eventPaused = !state.eventPaused;
+  els.eventPause.textContent = state.eventPaused ? "繼續" : "暫停";
+});
+els.rawPause.addEventListener("click", () => {
+  state.rawPaused = !state.rawPaused;
+  els.rawPause.textContent = state.rawPaused ? "繼續" : "暫停";
+});
+for (const log of [els.eventLog, els.rawLog]) {
+  log.addEventListener("scroll", () => flushLog(log));
+}
+els.eventClear.addEventListener("click", () => {
+  logBuffers.delete(els.eventLog);
+  els.eventLog.replaceChildren();
+});
+els.rawClear.addEventListener("click", () => {
+  logBuffers.delete(els.rawLog);
+  els.rawLog.replaceChildren();
+});
+
+document.querySelectorAll("[data-sim]").forEach((button) => button.addEventListener("click", () => {
+  const [kind, code, value] = button.dataset.sim.split(",").map(Number);
+  simulate(kind, code, value).catch((error) => setStatus(error.message));
+}));
+document.querySelectorAll("[data-sim-tap]").forEach((button) => button.addEventListener("click", async () => {
+  const [kind, code] = button.dataset.simTap.split(",").map(Number);
+  if (kind === IN.KEY) els.keySink.focus();
+  try {
+    await simulate(kind, code, 1);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await simulate(kind, code, 0);
+  } catch (error) {
+    setStatus(error.message);
+  }
+}));
+els.releaseAll.addEventListener("click", () => request(CMD.RELEASE_ALL).catch((error) => setStatus(error.message)));
+
+if ("hid" in navigator) {
+  navigator.hid.addEventListener("disconnect", (event) => {
+    if (event.device === state.device) disconnected();
+  });
 }
 
-renderPhysicalKeys();
-
-document.querySelectorAll("[data-layer]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const layer = Number(button.dataset.layer);
-    try {
-      const response = await request(CMD_SET_ACTIVE_LAYER, new Uint8Array([layer]));
-      if (response.status !== 0) {
-        throw new Error(`Set layer failed: ${response.status}`);
-      }
-      await refreshConfig();
-    } catch (error) {
-      setStatus(error.message);
-    }
-  });
-});
-
-document.querySelectorAll("[data-sim]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const [kind, code, value] = button.dataset.sim.split(",").map((item) => Number(item));
-    try {
-      await simulate(kind, code, value);
-    } catch (error) {
-      setStatus(error.message);
-    }
-  });
-});
-
-document.querySelectorAll("[data-mouse-tap]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    try {
-      await tapMouse(Number(button.dataset.mouseTap));
-    } catch (error) {
-      setStatus(error.message);
-    }
-  });
-});
-
-els.releaseAll.addEventListener("click", async () => {
-  try {
-    await releaseAll();
-  } catch (error) {
-    setStatus(error.message);
-  }
-});
+renderLayerButtons(els.activeLayers, setActiveLayer);
+renderLayerButtons(els.editLayers, selectEditLayer);
+markLayer(els.editLayers, 0);
+renderManualInputs();
+selectEditLayer(0);

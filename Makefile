@@ -10,7 +10,7 @@ HOST_PROBE_UF2 := $(BUILD_DIR)/host_probe.uf2
 WEB_PID := .web.pid
 WEB_LOG := .web.log
 
-.PHONY: all help configure build firmware flash firmware-write build-host-probe probe flash-host-probe probe-write clean distclean doctor web-start web-stop web-restart web-status web-open record-handle summarize-handle analyze-captures validate-layout list-handle
+.PHONY: all help configure build firmware flash firmware-write build-host-probe probe flash-host-probe probe-write test-firmware clean distclean doctor web-start web-stop web-restart web-status web-open record-handle summarize-handle analyze-captures validate-layout list-handle
 
 all: build
 
@@ -20,6 +20,7 @@ help:
 	@echo "  make flash              Build and copy keyremap UF2 to RPI-RP2"
 	@echo "  make build-host-probe   Build host-only probe firmware"
 	@echo "  make flash-host-probe   Build and copy host_probe UF2 to RPI-RP2"
+	@echo "  make test-firmware      Run host-side firmware unit tests"
 	@echo ""
 	@echo "Web UI:"
 	@echo "  make web-start          Start local static server at http://$(WEB_HOST):$(WEB_PORT)"
@@ -86,6 +87,11 @@ flash-host-probe: build-host-probe
 	sync
 
 probe-write: flash-host-probe
+
+test-firmware:
+	@mkdir -p build/test
+	gcc -Wall -Wextra -Werror -std=c11 -I$(FIRMWARE_DIR)/src $(FIRMWARE_DIR)/test/test_hid_parser.c $(FIRMWARE_DIR)/src/hid_parser.c -o build/test/test_hid_parser
+	build/test/test_hid_parser
 
 clean:
 	cmake --build "$(BUILD_DIR)" --target clean

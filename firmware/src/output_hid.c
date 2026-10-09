@@ -13,13 +13,14 @@ enum {
   HID_ITF_CONFIG = 3,
 };
 
-static output_state_t state;
 static uint8_t pressed_keys[6];
 static uint8_t keyboard_modifiers;
 static uint8_t mouse_buttons;
-static int8_t pending_mouse_x;
-static int8_t pending_mouse_y;
-static int8_t pending_mouse_wheel;
+/* Movement accumulates here and is drained in int8 steps, so large deltas
+ * (scaled or high-resolution input) are not truncated. */
+static int32_t pending_mouse_x;
+static int32_t pending_mouse_y;
+static int32_t pending_mouse_wheel;
 static uint16_t pending_consumer;
 static bool keyboard_pending;
 static bool mouse_pending;
@@ -90,7 +91,18 @@ static void queue_keyboard_report(void) {
   keyboard_pending = true;
 }
 
-static void queue_mouse_report(int8_t x, int8_t y, int8_t wheel) {
+static int8_t take_step(int32_t *pending) {
+  int32_t step = *pending;
+  if (step > 127) {
+    step = 127;
+  } else if (step < -127) {
+    step = -127;
+  }
+  *pending -= step;
+  return (int8_t)step;
+}
+
+static void queue_mouse_report(int32_t x, int32_t y, int32_t wheel) {
   pending_mouse_x += x;
   pending_mouse_y += y;
   pending_mouse_wheel += wheel;
@@ -98,7 +110,6 @@ static void queue_mouse_report(int8_t x, int8_t y, int8_t wheel) {
 }
 
 void output_hid_init(void) {
-  memset(&state, 0, sizeof(state));
   memset(pressed_keys, 0, sizeof(pressed_keys));
   keyboard_modifiers = 0;
   mouse_buttons = 0;
@@ -117,11 +128,17 @@ void output_hid_task(void) {
     keyboard_pending = false;
   }
 
-  if (mouse_pending && send_mouse_report(pending_mouse_x, pending_mouse_y, pending_mouse_wheel)) {
-    pending_mouse_x = 0;
-    pending_mouse_y = 0;
-    pending_mouse_wheel = 0;
-    mouse_pending = false;
+  if (mouse_pending && tud_hid_n_ready(HID_ITF_MOUSE)) {
+    int8_t x = take_step(&pending_mouse_x);
+    int8_t y = take_step(&pending_mouse_y);
+    int8_t wheel = take_step(&pending_mouse_wheel);
+    if (send_mouse_report(x, y, wheel)) {
+      mouse_pending = pending_mouse_x || pending_mouse_y || pending_mouse_wheel;
+    } else {
+      pending_mouse_x += x;
+      pending_mouse_y += y;
+      pending_mouse_wheel += wheel;
+    }
   }
 
   if (consumer_pending && send_consumer_report(pending_consumer)) {
@@ -147,11 +164,6 @@ void output_hid_release_all(void) {
 }
 
 void output_hid_apply(const output_event_t *event) {
-  state.kind = event->kind;
-  state.code = event->code;
-  state.value = event->value;
-  state.count++;
-
   switch (event->kind) {
     case OUTPUT_KIND_KEY:
       keyboard_set_key(event->code, event->value != 0);
@@ -169,13 +181,13 @@ void output_hid_apply(const output_event_t *event) {
       queue_mouse_report(0, 0, 0);
       break;
     case OUTPUT_KIND_REL_X:
-      queue_mouse_report((int8_t)event->value, 0, 0);
+      queue_mouse_report(event->value, 0, 0);
       break;
     case OUTPUT_KIND_REL_Y:
-      queue_mouse_report(0, (int8_t)event->value, 0);
+      queue_mouse_report(0, event->value, 0);
       break;
     case OUTPUT_KIND_WHEEL:
-      queue_mouse_report(0, 0, (int8_t)event->value);
+      queue_mouse_report(0, 0, event->value);
       break;
     case OUTPUT_KIND_CONSUMER:
       if (event->value) {
@@ -187,8 +199,4 @@ void output_hid_apply(const output_event_t *event) {
     default:
       break;
   }
-}
-
-const output_state_t *output_hid_state(void) {
-  return &state;
 }

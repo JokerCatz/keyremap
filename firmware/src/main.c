@@ -4,7 +4,9 @@
 #include "config.h"
 #include "host_input.h"
 #include "keyremap_protocol.h"
+#include "mapper.h"
 #include "output_hid.h"
+#include "raw_capture.h"
 #include "pico/bootrom.h"
 #include "pico/stdlib.h"
 #include "status_led.h"
@@ -36,16 +38,106 @@ static void send_response(uint8_t command, uint8_t sequence, uint8_t status, con
   }
 }
 
+static void put_u16(uint8_t *dst, uint16_t value) {
+  dst[0] = (uint8_t)(value & 0xff);
+  dst[1] = (uint8_t)(value >> 8);
+}
+
+static void put_u32(uint8_t *dst, uint32_t value) {
+  for (uint8_t i = 0; i < 4; i++) {
+    dst[i] = (uint8_t)(value >> (8 * i));
+  }
+}
+
+static uint32_t get_u32(const uint8_t *src) {
+  return (uint32_t)src[0] | ((uint32_t)src[1] << 8) | ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24);
+}
+
+static void handle_get_raw_reports(uint8_t sequence, const uint8_t *payload, uint8_t len) {
+  if (len != 4) {
+    send_response(CMD_GET_RAW_REPORTS, sequence, STATUS_INVALID_LENGTH, NULL, 0);
+    return;
+  }
+
+  uint8_t response[KEYREMAP_REPORT_SIZE - 4] = {0};
+  uint8_t pos = 6;
+  uint8_t count = 0;
+  uint32_t after = get_u32(payload);
+
+  while (true) {
+    bool dropped;
+    const raw_report_t *entry = raw_capture_next(after, &dropped);
+    if (!entry || pos + 6 + entry->len > sizeof(response)) {
+      break;
+    }
+    if (dropped) {
+      response[1] |= 0x01;
+    }
+
+    put_u32(&response[pos], entry->seq);
+    response[pos + 4] = (uint8_t)(entry->instance | (entry->truncated ? 0x80 : 0));
+    response[pos + 5] = entry->len;
+    memcpy(&response[pos + 6], entry->data, entry->len);
+    pos = (uint8_t)(pos + 6 + entry->len);
+    after = entry->seq;
+    count++;
+  }
+
+  response[0] = count;
+  put_u32(&response[2], raw_capture_latest_seq());
+  send_response(CMD_GET_RAW_REPORTS, sequence, STATUS_OK, response, pos);
+}
+
+static void handle_get_hid_interfaces(uint8_t sequence) {
+  uint8_t response[1 + RAW_CAPTURE_INSTANCE_COUNT * 6] = {0};
+  response[0] = RAW_CAPTURE_INSTANCE_COUNT;
+
+  for (uint8_t i = 0; i < RAW_CAPTURE_INSTANCE_COUNT; i++) {
+    const raw_interface_t *itf = raw_capture_interface(i);
+    uint8_t *dst = &response[1 + i * 6];
+    dst[0] = itf->mounted ? 1 : 0;
+    dst[1] = itf->itf_protocol;
+    dst[2] = itf->protocol_mode;
+    put_u16(&dst[3], itf->desc_len);
+    dst[5] = host_input_layout_flags(i);
+  }
+
+  send_response(CMD_GET_HID_INTERFACES, sequence, STATUS_OK, response, sizeof(response));
+}
+
+static void handle_get_report_descriptor(uint8_t sequence, const uint8_t *payload, uint8_t len) {
+  if (len != 3 || payload[0] >= RAW_CAPTURE_INSTANCE_COUNT) {
+    send_response(CMD_GET_REPORT_DESCRIPTOR, sequence, STATUS_INVALID_LENGTH, NULL, 0);
+    return;
+  }
+
+  const raw_interface_t *itf = raw_capture_interface(payload[0]);
+  uint16_t offset = (uint16_t)(payload[1] | (payload[2] << 8));
+  uint8_t response[KEYREMAP_REPORT_SIZE - 4] = {0};
+  uint8_t chunk = 0;
+
+  if (offset < itf->desc_len) {
+    uint16_t remaining = (uint16_t)(itf->desc_len - offset);
+    chunk = (uint8_t)(remaining > sizeof(response) - 5 ? sizeof(response) - 5 : remaining);
+    memcpy(&response[5], &itf->desc[offset], chunk);
+  }
+
+  response[0] = payload[0];
+  put_u16(&response[1], offset);
+  put_u16(&response[3], itf->desc_len);
+  send_response(CMD_GET_REPORT_DESCRIPTOR, sequence, STATUS_OK, response, (uint8_t)(5 + chunk));
+}
+
 static void handle_get_info(uint8_t sequence) {
   uint8_t payload[60] = {0};
   const char board_name[] = "rp2040-zero";
 
-  payload[0] = 1;
-  payload[1] = 0;
+  payload[0] = KEYREMAP_PROTOCOL_MAJOR;
+  payload[1] = KEYREMAP_PROTOCOL_MINOR;
   payload[2] = 0;
-  payload[3] = 2;
+  payload[3] = 3;
   payload[4] = 0;
-  payload[5] = config_active_layer();
+  payload[5] = mapper_active_layer();
   payload[6] = host_input_status();
   memcpy(&payload[7], board_name, sizeof(board_name));
 
@@ -60,7 +152,7 @@ static void handle_get_config_summary(uint8_t sequence) {
   payload[1] = KEYREMAP_LAYER_COUNT;
   payload[2] = KEYREMAP_BINDING_COUNT;
   payload[3] = cfg->active_profile;
-  payload[4] = cfg->active_layer;
+  payload[4] = mapper_active_layer();
   payload[5] = (uint8_t)(cfg->generation & 0xff);
   payload[6] = (uint8_t)((cfg->generation >> 8) & 0xff);
   payload[7] = (uint8_t)((cfg->generation >> 16) & 0xff);
@@ -153,27 +245,22 @@ static void handle_set_led(uint8_t sequence, const uint8_t *payload, uint8_t len
   send_response(CMD_SET_LED, sequence, STATUS_OK, NULL, 0);
 }
 
-static void set_layer_color(uint8_t layer) {
-  status_led_set_layer(layer);
-}
-
 static void handle_set_active_layer(uint8_t sequence, const uint8_t *payload, uint8_t len) {
   if (len != 1) {
     send_response(CMD_SET_ACTIVE_LAYER, sequence, STATUS_INVALID_LENGTH, NULL, 0);
     return;
   }
 
-  if (!config_set_active_layer(payload[0])) {
+  if (!mapper_set_base_layer(payload[0])) {
     send_response(CMD_SET_ACTIVE_LAYER, sequence, STATUS_INVALID_LENGTH, NULL, 0);
     return;
   }
 
-  set_layer_color(payload[0]);
   send_response(CMD_SET_ACTIVE_LAYER, sequence, STATUS_OK, &payload[0], 1);
 }
 
 static void handle_get_layer_state(uint8_t sequence) {
-  uint8_t payload[] = {config_active_layer()};
+  uint8_t payload[] = {mapper_active_layer()};
   send_response(CMD_GET_LAYER_STATE, sequence, STATUS_OK, payload, sizeof(payload));
 }
 
@@ -195,21 +282,44 @@ static void handle_get_host_status(uint8_t sequence) {
   send_response(CMD_GET_HOST_STATUS, sequence, STATUS_OK, payload, sizeof(payload));
 }
 
-static void handle_get_input_event(uint8_t sequence) {
-  const input_event_t *event = host_input_last_event();
-  uint32_t count = host_input_event_count();
-  uint8_t payload[] = {
-    event->kind,
-    event->code,
-    (uint8_t)(event->value & 0xff),
-    (uint8_t)((event->value >> 8) & 0xff),
-    (uint8_t)(count & 0xff),
-    (uint8_t)((count >> 8) & 0xff),
-    (uint8_t)((count >> 16) & 0xff),
-    (uint8_t)((count >> 24) & 0xff),
-  };
+static void handle_get_event_log(uint8_t sequence, const uint8_t *payload, uint8_t len) {
+  if (len != 4) {
+    send_response(CMD_GET_EVENT_LOG, sequence, STATUS_INVALID_LENGTH, NULL, 0);
+    return;
+  }
 
-  send_response(CMD_GET_INPUT_EVENT, sequence, STATUS_OK, payload, sizeof(payload));
+  uint8_t response[KEYREMAP_REPORT_SIZE - 4] = {0};
+  uint8_t pos = 6;
+  uint8_t count = 0;
+  uint32_t after = get_u32(payload);
+
+  while (pos + 13 <= sizeof(response)) {
+    bool dropped;
+    const mapper_log_entry_t *entry = mapper_log_next(after, &dropped);
+    if (!entry) {
+      break;
+    }
+    if (dropped) {
+      response[1] |= 0x01;
+    }
+
+    uint8_t *dst = &response[pos];
+    put_u32(dst, entry->seq);
+    dst[4] = entry->input.kind;
+    dst[5] = entry->input.code;
+    put_u16(&dst[6], (uint16_t)entry->input.value);
+    dst[8] = entry->output.kind;
+    dst[9] = entry->output.code;
+    put_u16(&dst[10], (uint16_t)entry->output.value);
+    dst[12] = (uint8_t)(entry->layer | (entry->simulated ? 0x80 : 0));
+    pos = (uint8_t)(pos + 13);
+    after = entry->seq;
+    count++;
+  }
+
+  response[0] = count;
+  put_u32(&response[2], mapper_log_latest_seq());
+  send_response(CMD_GET_EVENT_LOG, sequence, STATUS_OK, response, pos);
 }
 
 static void handle_simulate_input(uint8_t sequence, const uint8_t *payload, uint8_t len) {
@@ -228,24 +338,8 @@ static void handle_simulate_input(uint8_t sequence, const uint8_t *payload, uint
   send_response(CMD_SIMULATE_INPUT, sequence, STATUS_OK, NULL, 0);
 }
 
-static void handle_get_output_state(uint8_t sequence) {
-  const output_state_t *state = output_hid_state();
-  uint8_t payload[8] = {
-    state->kind,
-    state->code,
-    (uint8_t)(state->value & 0xff),
-    (uint8_t)((state->value >> 8) & 0xff),
-    (uint8_t)(state->count & 0xff),
-    (uint8_t)((state->count >> 8) & 0xff),
-    (uint8_t)((state->count >> 16) & 0xff),
-    (uint8_t)((state->count >> 24) & 0xff),
-  };
-
-  send_response(CMD_GET_OUTPUT_STATE, sequence, STATUS_OK, payload, sizeof(payload));
-}
-
 static void handle_release_all(uint8_t sequence) {
-  output_hid_release_all();
+  mapper_release_all();
   send_response(CMD_RELEASE_ALL, sequence, STATUS_OK, NULL, 0);
 }
 
@@ -286,6 +380,15 @@ static void handle_report(uint8_t const *buffer, uint16_t bufsize) {
     case CMD_RESET_CONFIG:
       handle_reset_config(sequence);
       break;
+    case CMD_GET_RAW_REPORTS:
+      handle_get_raw_reports(sequence, payload, len);
+      break;
+    case CMD_GET_HID_INTERFACES:
+      handle_get_hid_interfaces(sequence);
+      break;
+    case CMD_GET_REPORT_DESCRIPTOR:
+      handle_get_report_descriptor(sequence, payload, len);
+      break;
     case CMD_SET_ACTIVE_LAYER:
       handle_set_active_layer(sequence, payload, len);
       break;
@@ -295,14 +398,11 @@ static void handle_report(uint8_t const *buffer, uint16_t bufsize) {
     case CMD_GET_HOST_STATUS:
       handle_get_host_status(sequence);
       break;
-    case CMD_GET_INPUT_EVENT:
-      handle_get_input_event(sequence);
+    case CMD_GET_EVENT_LOG:
+      handle_get_event_log(sequence, payload, len);
       break;
     case CMD_SIMULATE_INPUT:
       handle_simulate_input(sequence, payload, len);
-      break;
-    case CMD_GET_OUTPUT_STATE:
-      handle_get_output_state(sequence);
       break;
     case CMD_RELEASE_ALL:
       handle_release_all(sequence);
@@ -321,6 +421,7 @@ static void handle_report(uint8_t const *buffer, uint16_t bufsize) {
 int main(void) {
   board_init();
   config_init();
+  mapper_init();
   output_hid_init();
   host_input_init();
   status_led_init();

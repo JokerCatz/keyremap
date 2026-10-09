@@ -91,9 +91,9 @@ The firmware treats the on-board WS2812 as a status/layer indicator:
 ```text
 off      booting or fault before LED init
 green    host input active / base layer
-purple   nav layer
-cyan     media layer
-orange   game layer
+purple   layer 1
+cyan     layer 2
+orange   layer 3
 red      fault
 ```
 

@@ -15,9 +15,11 @@ pico_sdk_init()
 add_executable(keyremap
   src/main.c
   src/config.c
+  src/hid_parser.c
   src/host_input.c
   src/mapper.c
   src/output_hid.c
+  src/raw_capture.c
   src/status_led.c
   src/usb_descriptors.c
 )

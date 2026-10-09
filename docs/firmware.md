@@ -15,7 +15,9 @@
 - Static web UI can connect and request firmware info
 - PIO USB host port on GPIO2/GPIO3
 - Known handle VID/PID match: `1c4f:007c`
-- Keyboard and boot mouse style input reports
+- Input reports parsed from each interface's HID report descriptor (boot
+  keyboard/mouse interfaces use the fixed boot layout)
+- Raw report and event logs readable over the config channel
 - Keyboard, mouse, and consumer-control output reports
 - Flash-backed config storage
 - Four remap layers
@@ -36,8 +38,17 @@ button remains held during testing.
 Flash config is stored in the last 4096-byte flash sector. Web edits update RAM
 first; the `Save` button commits the current config to flash.
 
-Layer count is fixed at four. Layer actions support direct switch to layer
-`0..3` and next-layer cycling. The on-board WS2812 indicates the active layer.
+Layer count is fixed at four. Unbound inputs fall through to the base layer,
+and unbound base inputs pass through unchanged, so an empty config behaves like
+a plain USB pass-through. Layer actions: hold-to-switch, switch to layer
+`0..3`, and next-layer cycling. The on-board WS2812 indicates the active layer.
+See [protocol.md](protocol.md#remap-rules).
+
+Host-side unit tests for the HID descriptor parser:
+
+```sh
+make test-firmware
+```
 
 ## UF2 Flashing
 

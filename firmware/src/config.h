@@ -27,17 +27,15 @@ typedef struct {
 
 typedef struct {
   uint8_t active_profile;
-  uint8_t active_layer;
   uint32_t generation;
   keyremap_profile_t profiles[KEYREMAP_PROFILE_COUNT];
 } keyremap_config_t;
 
 void config_init(void);
 const keyremap_config_t *config_get(void);
-uint8_t config_active_layer(void);
-bool config_set_active_layer(uint8_t layer);
 bool config_get_binding(uint8_t layer, uint8_t slot, keyremap_binding_t *binding);
 bool config_set_binding(uint8_t layer, uint8_t slot, const keyremap_binding_t *binding);
 bool config_save(void);
 void config_reset_default(void);
-const keyremap_binding_t *config_find_binding(uint8_t input_kind, uint8_t input_code);
+/* Bindings with output kind NONE are transparent and are not returned. */
+const keyremap_binding_t *config_find_binding(uint8_t layer, uint8_t input_kind, uint8_t input_code);

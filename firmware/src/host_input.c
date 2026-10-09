@@ -2,9 +2,9 @@
 
 #include <string.h>
 
-#include "config.h"
+#include "hid_parser.h"
 #include "keyremap_protocol.h"
-#include "output_hid.h"
+#include "raw_capture.h"
 #include "pico/stdlib.h"
 #include "pio_usb_ll.h"
 #include "status_led.h"
@@ -14,15 +14,28 @@
 #define TARGET_VID 0x1c4f
 #define TARGET_PID 0x007c
 
-static hid_keyboard_report_t previous_keyboard_report;
-static uint8_t previous_mouse_buttons;
+#define PRESSED_MAX 24
+
+typedef struct {
+  uint8_t report_id;
+  uint8_t kind;
+  uint8_t code;
+} pressed_input_t;
+
+typedef struct {
+  bool active;
+  bool boot;
+  hid_layout_t layout;
+  pressed_input_t pressed[PRESSED_MAX];
+  uint8_t pressed_count;
+} instance_state_t;
+
+static instance_state_t instances[CFG_TUH_HID];
 static uint8_t host_status;
 static uint16_t mounted_vid;
 static uint16_t mounted_pid;
 static uint32_t last_attach_kick_ms;
 static uint32_t last_reconnect_kick_ms;
-static input_event_t last_input_event;
-static uint32_t input_event_count;
 
 static void dispatch_event(uint8_t kind, uint8_t code, int16_t value) {
   input_event_t input = {
@@ -30,85 +43,165 @@ static void dispatch_event(uint8_t kind, uint8_t code, int16_t value) {
     .code = code,
     .value = value,
   };
-  last_input_event = input;
-  input_event_count++;
-  host_input_simulate(&input);
+  mapper_handle_input(&input, false);
 }
 
-static bool keyboard_report_has_key(const hid_keyboard_report_t *report, uint8_t keycode) {
-  for (uint8_t i = 0; i < 6; i++) {
-    if (report->keycode[i] == keycode) {
+static bool add_pressed(pressed_input_t *set, uint8_t *count, uint8_t report_id, uint8_t kind, uint8_t code) {
+  for (uint8_t i = 0; i < *count; i++) {
+    if (set[i].report_id == report_id && set[i].kind == kind && set[i].code == code) {
       return true;
     }
   }
+  if (*count >= PRESSED_MAX) {
+    return false;
+  }
+  set[*count].report_id = report_id;
+  set[*count].kind = kind;
+  set[*count].code = code;
+  (*count)++;
+  return true;
+}
 
+static bool set_contains(const pressed_input_t *set, uint8_t count, const pressed_input_t *item) {
+  for (uint8_t i = 0; i < count; i++) {
+    if (set[i].report_id == item->report_id && set[i].kind == item->kind && set[i].code == item->code) {
+      return true;
+    }
+  }
   return false;
 }
 
-static void process_modifier(uint8_t old_mod, uint8_t new_mod, uint8_t mask, uint8_t keycode) {
-  if ((old_mod & mask) != (new_mod & mask)) {
-    dispatch_event(INPUT_KIND_KEY, keycode, (new_mod & mask) ? 1 : 0);
+/* Maps a pressed usage to a digital input kind/code, or returns false. */
+static bool usage_to_digital(uint16_t page, uint32_t usage, uint8_t *kind, uint8_t *code) {
+  if (page == 0x07 && usage >= 0x04 && usage <= 0xe7) {
+    *kind = INPUT_KIND_KEY;
+  } else if (page == 0x09 && usage >= 1 && usage <= 8) {
+    *kind = INPUT_KIND_MOUSE_BUTTON;
+  } else if (page == 0x0c && usage >= 1 && usage <= 0xff) {
+    *kind = INPUT_KIND_CONSUMER;
+  } else {
+    return false;
+  }
+  *code = (uint8_t)usage;
+  return true;
+}
+
+static int16_t clamp16(int32_t value) {
+  if (value > INT16_MAX) {
+    return INT16_MAX;
+  }
+  if (value < INT16_MIN) {
+    return INT16_MIN;
+  }
+  return (int16_t)value;
+}
+
+static void process_report(instance_state_t *inst, const uint8_t *report, uint16_t len) {
+  uint8_t report_id = 0;
+  if (inst->layout.uses_report_id && !inst->boot) {
+    if (len < 1) {
+      return;
+    }
+    report_id = report[0];
+    report++;
+    len--;
+  }
+
+  pressed_input_t current[PRESSED_MAX];
+  uint8_t current_count = 0;
+  bool matched = false;
+  int32_t axes[3] = {0, 0, 0};
+
+  for (uint8_t f = 0; f < inst->layout.field_count; f++) {
+    const hid_field_t *field = &inst->layout.fields[f];
+    if (field->report_id != report_id) {
+      continue;
+    }
+
+    for (uint8_t n = 0; n < field->count; n++) {
+      int32_t value;
+      if (!hid_parser_read(field, n, report, len, &value)) {
+        break;
+      }
+      matched = true;
+
+      if (field->flags & HID_FIELD_ARRAY) {
+        if (value < field->logical_min || value == 0) {
+          continue;
+        }
+        uint32_t usage = field->usage + (uint32_t)(value - field->logical_min);
+        uint8_t kind;
+        uint8_t code;
+        if (usage_to_digital(field->usage_page, usage, &kind, &code)) {
+          add_pressed(current, &current_count, report_id, kind, code);
+        }
+      } else if (field->usage_page == 0x01) {
+        uint8_t axis = field->usage == 0x30 ? 0 : field->usage == 0x31 ? 1 : 2;
+        axes[axis] += value;
+      } else if (!(field->flags & HID_FIELD_RELATIVE) && value) {
+        uint8_t kind;
+        uint8_t code;
+        if (usage_to_digital(field->usage_page, field->usage, &kind, &code)) {
+          add_pressed(current, &current_count, report_id, kind, code);
+        }
+      }
+    }
+  }
+
+  if (!matched) {
+    return;
+  }
+
+  /* Releases first, then presses, then movement. */
+  for (uint8_t i = 0; i < inst->pressed_count; i++) {
+    const pressed_input_t *old = &inst->pressed[i];
+    if (old->report_id == report_id && !set_contains(current, current_count, old)) {
+      dispatch_event(old->kind, old->code, 0);
+    }
+  }
+
+  pressed_input_t next[PRESSED_MAX];
+  uint8_t next_count = 0;
+  for (uint8_t i = 0; i < inst->pressed_count; i++) {
+    if (inst->pressed[i].report_id != report_id) {
+      next[next_count++] = inst->pressed[i];
+    }
+  }
+  for (uint8_t i = 0; i < current_count; i++) {
+    if (!set_contains(inst->pressed, inst->pressed_count, &current[i])) {
+      dispatch_event(current[i].kind, current[i].code, 1);
+    }
+    add_pressed(next, &next_count, current[i].report_id, current[i].kind, current[i].code);
+  }
+  memcpy(inst->pressed, next, sizeof(next[0]) * next_count);
+  inst->pressed_count = next_count;
+
+  if (axes[0]) {
+    dispatch_event(INPUT_KIND_REL_X, 0, clamp16(axes[0]));
+  }
+  if (axes[1]) {
+    dispatch_event(INPUT_KIND_REL_Y, 0, clamp16(axes[1]));
+  }
+  if (axes[2]) {
+    dispatch_event(INPUT_KIND_WHEEL, 0, clamp16(axes[2]));
   }
 }
 
-static void process_keyboard_report(const hid_keyboard_report_t *report) {
-  process_modifier(previous_keyboard_report.modifier, report->modifier, KEYBOARD_MODIFIER_LEFTCTRL, 0xe0);
-  process_modifier(previous_keyboard_report.modifier, report->modifier, KEYBOARD_MODIFIER_LEFTSHIFT, 0xe1);
-  process_modifier(previous_keyboard_report.modifier, report->modifier, KEYBOARD_MODIFIER_LEFTALT, 0xe2);
-  process_modifier(previous_keyboard_report.modifier, report->modifier, KEYBOARD_MODIFIER_LEFTGUI, 0xe3);
-  process_modifier(previous_keyboard_report.modifier, report->modifier, KEYBOARD_MODIFIER_RIGHTCTRL, 0xe4);
-  process_modifier(previous_keyboard_report.modifier, report->modifier, KEYBOARD_MODIFIER_RIGHTSHIFT, 0xe5);
-  process_modifier(previous_keyboard_report.modifier, report->modifier, KEYBOARD_MODIFIER_RIGHTALT, 0xe6);
-  process_modifier(previous_keyboard_report.modifier, report->modifier, KEYBOARD_MODIFIER_RIGHTGUI, 0xe7);
-
-  for (uint8_t i = 0; i < 6; i++) {
-    uint8_t keycode = report->keycode[i];
-    if (keycode && !keyboard_report_has_key(&previous_keyboard_report, keycode)) {
-      dispatch_event(INPUT_KIND_KEY, keycode, 1);
-    }
+static void release_instance(instance_state_t *inst) {
+  for (uint8_t i = 0; i < inst->pressed_count; i++) {
+    dispatch_event(inst->pressed[i].kind, inst->pressed[i].code, 0);
   }
-
-  for (uint8_t i = 0; i < 6; i++) {
-    uint8_t keycode = previous_keyboard_report.keycode[i];
-    if (keycode && !keyboard_report_has_key(report, keycode)) {
-      dispatch_event(INPUT_KIND_KEY, keycode, 0);
-    }
-  }
-
-  previous_keyboard_report = *report;
-}
-
-static void process_mouse_report(const hid_mouse_report_t *report) {
-  for (uint8_t i = 0; i < 8; i++) {
-    uint8_t mask = (uint8_t)(1u << i);
-    if ((previous_mouse_buttons & mask) != (report->buttons & mask)) {
-      dispatch_event(INPUT_KIND_MOUSE_BUTTON, (uint8_t)(i + 1), (report->buttons & mask) ? 1 : 0);
-    }
-  }
-
-  if (report->x) {
-    dispatch_event(INPUT_KIND_REL_X, 0, report->x);
-  }
-  if (report->y) {
-    dispatch_event(INPUT_KIND_REL_Y, 0, report->y);
-  }
-  if (report->wheel) {
-    dispatch_event(INPUT_KIND_WHEEL, 0, report->wheel);
-  }
-
-  previous_mouse_buttons = report->buttons;
+  memset(inst, 0, sizeof(*inst));
 }
 
 void host_input_init(void) {
-  memset(&previous_keyboard_report, 0, sizeof(previous_keyboard_report));
-  previous_mouse_buttons = 0;
+  memset(instances, 0, sizeof(instances));
   host_status = 0;
   mounted_vid = 0;
   mounted_pid = 0;
   last_attach_kick_ms = 0;
   last_reconnect_kick_ms = 0;
-  memset(&last_input_event, 0, sizeof(last_input_event));
-  input_event_count = 0;
+  raw_capture_init();
 }
 
 void host_input_task(void) {
@@ -138,35 +231,29 @@ void host_input_task(void) {
 }
 
 void host_input_simulate(const input_event_t *event) {
-  output_event_t output;
-
-  if (mapper_process(event, &output)) {
-    if (output.kind == OUTPUT_KIND_LAYER) {
-      if (event->value && config_set_active_layer(output.code)) {
-        status_led_set_layer(output.code);
-      }
-      output_hid_apply(&output);
-      return;
-    }
-
-    if (output.kind == OUTPUT_KIND_NEXT_LAYER) {
-      if (event->value) {
-        uint8_t layer = (uint8_t)((config_active_layer() + 1) % KEYREMAP_LAYER_COUNT);
-        if (config_set_active_layer(layer)) {
-          status_led_set_layer(layer);
-        }
-      }
-      output_hid_apply(&output);
-      return;
-    }
-
-    output_hid_apply(&output);
-  }
+  mapper_handle_input(event, true);
 }
 
 void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *desc_report, uint16_t desc_len) {
-  (void)desc_report;
-  (void)desc_len;
+  uint8_t itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
+  uint8_t protocol_mode = tuh_hid_get_protocol(dev_addr, instance);
+  raw_capture_mount(instance, itf_protocol, protocol_mode, desc_report, desc_len);
+
+  if (instance < CFG_TUH_HID) {
+    instance_state_t *inst = &instances[instance];
+    memset(inst, 0, sizeof(*inst));
+    inst->active = true;
+    /* TinyUSB only switches boot-subclass interfaces to boot protocol; their
+     * reports then use the fixed boot layout instead of the descriptor. */
+    inst->boot = itf_protocol != HID_ITF_PROTOCOL_NONE && protocol_mode == HID_PROTOCOL_BOOT;
+    if (inst->boot && itf_protocol == HID_ITF_PROTOCOL_KEYBOARD) {
+      hid_parser_boot_keyboard(&inst->layout);
+    } else if (inst->boot && itf_protocol == HID_ITF_PROTOCOL_MOUSE) {
+      hid_parser_boot_mouse(&inst->layout);
+    } else {
+      hid_parser_parse(desc_report, desc_len, &inst->layout);
+    }
+  }
 
   uint16_t vid;
   uint16_t pid;
@@ -202,8 +289,11 @@ void tuh_mount_cb(uint8_t dev_addr) {
 
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
   (void)dev_addr;
-  (void)instance;
-  output_hid_release_all();
+  raw_capture_unmount(instance);
+  if (instance < CFG_TUH_HID) {
+    release_instance(&instances[instance]);
+  }
+  mapper_release_all();
   host_status = 3;
   mounted_vid = 0;
   mounted_pid = 0;
@@ -212,7 +302,11 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
 
 void tuh_umount_cb(uint8_t dev_addr) {
   (void)dev_addr;
-  output_hid_release_all();
+  raw_capture_unmount_all();
+  for (uint8_t i = 0; i < CFG_TUH_HID; i++) {
+    release_instance(&instances[i]);
+  }
+  mapper_release_all();
   host_status = 3;
   mounted_vid = 0;
   mounted_pid = 0;
@@ -220,12 +314,10 @@ void tuh_umount_cb(uint8_t dev_addr) {
 }
 
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len) {
-  uint8_t protocol = tuh_hid_interface_protocol(dev_addr, instance);
+  raw_capture_report(instance, report, len);
 
-  if (protocol == HID_ITF_PROTOCOL_KEYBOARD && len >= sizeof(hid_keyboard_report_t)) {
-    process_keyboard_report((const hid_keyboard_report_t *)report);
-  } else if (protocol == HID_ITF_PROTOCOL_MOUSE && len >= sizeof(hid_mouse_report_t)) {
-    process_mouse_report((const hid_mouse_report_t *)report);
+  if (instance < CFG_TUH_HID && instances[instance].active) {
+    process_report(&instances[instance], report, len);
   }
 
   if (!tuh_hid_receive_report(dev_addr, instance)) {
@@ -246,10 +338,22 @@ uint16_t host_input_pid(void) {
   return mounted_pid;
 }
 
-const input_event_t *host_input_last_event(void) {
-  return &last_input_event;
-}
+uint8_t host_input_layout_flags(uint8_t instance) {
+  if (instance >= CFG_TUH_HID || !instances[instance].active) {
+    return 0;
+  }
 
-uint32_t host_input_event_count(void) {
-  return input_event_count;
+  const instance_state_t *inst = &instances[instance];
+  uint8_t flags = inst->boot ? 0x80 : 0;
+  for (uint8_t i = 0; i < inst->layout.field_count; i++) {
+    const hid_field_t *field = &inst->layout.fields[i];
+    switch (field->usage_page) {
+      case 0x07: flags |= 0x01; break;
+      case 0x09: flags |= 0x02; break;
+      case 0x01: flags |= 0x04; break;
+      case 0x0c: flags |= (field->flags & HID_FIELD_RELATIVE) ? 0 : 0x08; break;
+      default: break;
+    }
+  }
+  return flags;
 }

@@ -73,16 +73,14 @@ Relative mouse events use signed movement values.
 
 ## Firmware Debug Mode
 
-The firmware currently supports simulated input through the WebHID config
-channel:
+The web UI 偵測 (Monitor) tab shows, live:
 
-```text
-0x40 simulate input
-0x41 get output state
-```
+- raw HID reports exactly as the handle sent them (`0x20`)
+- each parsed input event and what it was remapped to (`0x34`)
 
-The web UI uses this to test the remap pipeline before the physical host port is
-available.
+The 裝置 (Device) tab shows each handle interface and its decoded report
+descriptor (`0x21`, `0x22`). Use these to check whether a problem is on the
+input side (no raw report, or a raw report that decodes to nothing) or on the
+remap side.
 
-After the Type-A host port is soldered, the same debug view should show raw host
-reports and mapped output events from the actual handle.
+`0x40 simulate input` injects an input event into the remap pipeline.

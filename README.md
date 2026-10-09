@@ -20,9 +20,13 @@ The current firmware is usable for the target handle:
 
 - RP2040-Zero acts as a USB HID device to the computer
 - PIO USB host on GPIO2/GPIO3 reads the handle
-- Keyboard and boot mouse style reports can be remapped
-- Four layers are supported, including direct layer switch and next-layer actions
+- Keyboard, mouse (stick/buttons/wheel) and consumer inputs are parsed from the
+  handle's HID report descriptors and can be remapped
+- Four layers: unbound inputs fall through to the base layer, and unbound base
+  inputs pass through unchanged
+- Layer switching is a binding: hold-to-switch, switch-to, or next-layer
 - Config is edited from a static WebHID page and saved to RP2040 flash
+- The web page shows raw HID reports and every input → output event live
 - The on-board WS2812 indicates host/layer status
 
 ## Layout
@@ -41,7 +45,16 @@ The Makefile defaults to `$(HOME)/sdk/pico-sdk`.
 make doctor
 make build
 make flash
+make test-firmware
 ```
+
+Hosted Web UI: https://jokercatz.github.io/keyremap/
+
+## Switching Layers
+
+The default config has no layer key. In the web UI 綁定 tab, pick a key with
+「按手把新增」 and set its output to e.g. 「按住時切到 Layer 1」. Then build the
+Layer 1 bindings; anything not bound there keeps working as in Base.
 
 Local Web UI:
 
